@@ -1,54 +1,38 @@
-### TwinCAT3 ###
-# website: https://www.beckhoff.com/twincat3/
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+*.egg-info/
+dist/
+build/
 
-# TwinCAT PLC
-*.plcproj.bak
-*.plcproj.orig
-*.tpy
-*.tclrs
-*.library
-*.compiled-library
-*.compileinfo
-*.asm
-*.core
-LineIDs.dbg
-LineIDs.dbg.bak
+# Logs
+*.log
+logs/
 
-# TwinCAT C++ and shared types
-# ignoring the TMC file is only useful for plain PLC programming
-# as soon as shared data types (via tmc), C++ or in general TcCom-Module are used, the TMC file has to be part of the repository
-*.tmc
-*.tmcRefac
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
 
-# TwinCAT project files
-*.tsproj.bak
-*.tsproj.b?k
-*.tsproj.orig
-*.tspproj.bak
-*.xti.bak
-*.xti.bk?
-*.xti.orig
-*.xtv
-*.xtv.bak
-*.xtv.bk?
+# OS
+.DS_Store
+Thumbs.db
 
-# Multiuser specific
-**/.TcGit/
+# Docker
+.dockerignore
 
-# exclude not required folders
-**/_Boot/
-**/_CompileInfo/
-**/_Libraries/
-**/_ModuleInstall/
-**/_Deployment/
-**/_Repository/
+# Local config overrides
+config/local_*.json
 
-# To include a specific library directory (i.e. third party/custom libs), 
-# use pattern `!/**/_Libraries/<directory name>/` i.e. `!/**/_Libraries/www.tcunit.org/`
-# 
+# Data files (don't commit large datasets)
+data/
+backups/
 
-# VS Shell project specific files and folders
-**/.vs/
-*.~u
-*.project.~u
-*.suo
+# Grafana local storage
+grafana/data/

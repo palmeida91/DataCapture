@@ -1,0 +1,13 @@
+Production Monitoring System
+Version: 1.0.1 (Namespace 3 Fix)
+Release Date: January 2026
+Python: 3.11-3.13
+Docker: 24.0+
+
+Changes in 1.0.1:
+- Fixed namespace from 2 to 3
+- Updated OPC UA node paths for direct global variable access
+- Fixed _build_node_id to handle empty plc_name
+- Updated all batch files for Docker Compose V2
+- Added certificate generator script
+- Improved error messages and logging
