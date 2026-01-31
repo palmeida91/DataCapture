@@ -1,0 +1,10 @@
+version: '3.8'
+
+services:
+  mcp-postgres:
+    image: ghcr.io/modelcontextprotocol/mcp-server-postgres:latest
+    container_name: mcp_postgres_server
+    command: >
+      postgresql://collector:secure_password_here@host.docker.internal:5432/production
+    restart: unless-stopped
+    network_mode: "host"

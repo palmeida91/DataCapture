@@ -154,21 +154,16 @@ class OEEDataCollector:
         
         for seq_id in active_seqs:
             try:
-                # Last cycle time from TA database (excludes downtime - blocked/starved/fault)
-                # This gives us the actual running cycle time, not time between parts
-                node_id = f'ns=3;s="cycleTimeScreenInterfaceTADB"."Type"[{seq_id}]."Last"'
+                # Last cycle time
+                node_id = f'ns=3;s="cycleTimeScreenInterfaceDB"."Type"[{seq_id}]."Last"'
                 last_cycle = await self.client.get_node(node_id).read_value()
                 
-                # Desired cycle time from TA database
-                # Note: PLC has typo "Desiered" instead of "Desired"
-                desired_node_id = f'ns=3;s="cycleTimeScreenInterfaceTADB"."Type"[{seq_id}]."Desiered"'
+                # Desired cycle time
+                desired_node_id = f'ns=3;s="cycleTimeScreenInterfaceDB"."Type"[{seq_id}]."Desired"'
                 try:
                     desired_cycle = await self.client.get_node(desired_node_id).read_value()
-                    # If desired is 0 or None, fall back to config default
-                    if not desired_cycle or desired_cycle == 0:
-                        desired_cycle = self.config['machine'].get('target_cycle_time_seconds', 17) * 1000
                 except:
-                    desired_cycle = self.config['machine'].get('target_cycle_time_seconds', 17) * 1000  # Default 17 seconds in ms
+                    desired_cycle = 17000  # Default 17 seconds
                 
                 if last_cycle is not None and last_cycle > 0:
                     cycle_data.append({
