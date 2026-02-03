@@ -1,8 +1,7 @@
 apiVersion: 1
-
 datasources:
   - name: ProductionDB
-    type: postgres
+    type: grafana-postgresql-datasource
     access: proxy
     url: postgres:5432
     database: production
@@ -11,7 +10,7 @@ datasources:
       password: 'secure_password_here'
     jsonData:
       sslmode: 'disable'
-      postgresVersion: 1600
+      postgresVersion: 1500
       timescaledb: true
     isDefault: true
     editable: true
