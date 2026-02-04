@@ -208,6 +208,10 @@ class BreakDetector:
     
     async def _insert_break_start(self, db_pool: asyncpg.Pool, scheduled: Dict, actual_start: datetime) -> int:
         """Insert actual_breaks row with start_time. Returns the new row id."""
+        # Ensure actual_start is timezone-naive for comparison
+        if actual_start.tzinfo is not None:
+            actual_start = actual_start.replace(tzinfo=None)
+        
         scheduled_start = datetime.combine(actual_start.date(), scheduled['start_time'])
         
         # Calculate early_start: how many minutes before scheduled did it actually start
@@ -229,6 +233,10 @@ class BreakDetector:
     
     async def _update_break_end(self, db_pool: asyncpg.Pool, break_id: int, scheduled: Dict, actual_end: datetime):
         """Update actual_breaks row with end_time, duration, and late_end_minutes."""
+        # Ensure actual_end is timezone-naive for comparison
+        if actual_end.tzinfo is not None:
+            actual_end = actual_end.replace(tzinfo=None)
+        
         scheduled_end = datetime.combine(actual_end.date(), scheduled['end_time'])
         
         # Calculate late_end: how many minutes after scheduled did it actually end
@@ -242,6 +250,10 @@ class BreakDetector:
             start_time = await conn.fetchval("""
                 SELECT start_time FROM actual_breaks WHERE id = $1
             """, break_id)
+            
+            # Ensure start_time from DB is also naive
+            if start_time.tzinfo is not None:
+                start_time = start_time.replace(tzinfo=None)
             
             duration = int((actual_end - start_time).total_seconds() // 60)
             
