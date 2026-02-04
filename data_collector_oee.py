@@ -122,6 +122,32 @@ class BreakDetector:
         
         return None
     
+    def is_in_scheduled_break_time(self) -> bool:
+        """
+        Check if current time is within a SCHEDULED break window (no buffer).
+        Used to exclude cycle time logging during scheduled breaks only.
+        Returns True if within scheduled break time, False otherwise.
+        """
+        now = datetime.now()
+        current_time = now.time()
+        
+        # Determine current shift
+        if dt_time(6, 0) <= current_time < dt_time(14, 0):
+            shift = 1
+        elif dt_time(14, 0) <= current_time < dt_time(22, 0):
+            shift = 2
+        else:
+            shift = 3
+        
+        for brk in self.scheduled_breaks:
+            if brk['shift_number'] != shift:
+                continue
+            # Check EXACT scheduled time window (no buffer)
+            if brk['start_time'] <= current_time <= brk['end_time']:
+                return True
+        
+        return False
+    
     def check_frozen(self, ta_data: List[Dict]) -> bool:
         """
         Compare current TA values against previous reading.
@@ -182,6 +208,10 @@ class BreakDetector:
     
     async def _insert_break_start(self, db_pool: asyncpg.Pool, scheduled: Dict, actual_start: datetime) -> int:
         """Insert actual_breaks row with start_time. Returns the new row id."""
+        # Ensure actual_start is timezone-naive for comparison
+        if actual_start.tzinfo is not None:
+            actual_start = actual_start.replace(tzinfo=None)
+        
         scheduled_start = datetime.combine(actual_start.date(), scheduled['start_time'])
         
         # Calculate early_start: how many minutes before scheduled did it actually start
@@ -203,6 +233,10 @@ class BreakDetector:
     
     async def _update_break_end(self, db_pool: asyncpg.Pool, break_id: int, scheduled: Dict, actual_end: datetime):
         """Update actual_breaks row with end_time, duration, and late_end_minutes."""
+        # Ensure actual_end is timezone-naive for comparison
+        if actual_end.tzinfo is not None:
+            actual_end = actual_end.replace(tzinfo=None)
+        
         scheduled_end = datetime.combine(actual_end.date(), scheduled['end_time'])
         
         # Calculate late_end: how many minutes after scheduled did it actually end
@@ -216,6 +250,10 @@ class BreakDetector:
             start_time = await conn.fetchval("""
                 SELECT start_time FROM actual_breaks WHERE id = $1
             """, break_id)
+            
+            # Ensure start_time from DB is also naive
+            if start_time.tzinfo is not None:
+                start_time = start_time.replace(tzinfo=None)
             
             duration = int((actual_end - start_time).total_seconds() // 60)
             
@@ -514,6 +552,9 @@ class OEEDataCollector:
         try:
             shift, hour = self._get_current_shift_and_hour()
             
+            # Check if we're in scheduled break time (for cycle time exclusion)
+            in_scheduled_break = self.break_detector.is_in_scheduled_break_time()
+            
             logger.info("=" * 70)
             logger.info(f"Collecting data from PLC (Shift {shift}, Hour {hour})...")
             
@@ -523,6 +564,9 @@ class OEEDataCollector:
             counters = await self.read_quality_counters()
             
             # Log what we collected
+            if in_scheduled_break:
+                logger.info(f"[COLLECTOR] In scheduled break - cycle times will NOT be stored")
+            
             logger.info(f"[DATA] Cycle Times: {len(cycles)} sequences")
             for c in cycles:
                 logger.info(f"  Seq {c['sequence_id']}: {c['cycle_time_sec']:.1f}s (target: {c['desired_cycle_sec']:.1f}s)")
@@ -535,8 +579,13 @@ class OEEDataCollector:
                 logger.info(f"[DATA] Quality Counters (Shift {counters['shift']}, Hour {counters['hour']})")
                 logger.info(f"  Good: {counters['good']}, Reject: {counters['reject']}, Rework: {counters['rework']}")
             
-            # Store in database
-            await self.store_cycle_times(cycles)
+            # Store in database - SKIP cycle times during scheduled break
+            if not in_scheduled_break:
+                await self.store_cycle_times(cycles)
+            else:
+                logger.info(f"[COLLECTOR] ⊘ Cycle times skipped (scheduled break)")
+            
+            # Always store TA and quality counters (even during breaks)
             await self.store_ta_data(ta_data)
             await self.store_quality_counters(counters)
             
