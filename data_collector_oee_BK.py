@@ -475,8 +475,32 @@ class OEEDataCollector:
             return None
     
     async def store_cycle_times(self, cycles: List[Dict]):
-        """Store cycle time data"""
+        """
+        Store cycle time data.
+        Filters out skip cycles for twin sync stations (seq 47, 48) where cycle < 10s.
+        """
         if not cycles:
+            return
+        
+        # Twin sync stations that alternate processing (skip cycles show ~5s)
+        TWIN_SYNC_STATIONS = {47, 48}  # MC595 SYNC1, MC596 SYNC2
+        SKIP_CYCLE_THRESHOLD = 10.0  # seconds
+        
+        # Filter cycles: exclude skip cycles for twin stations
+        filtered_cycles = []
+        skipped_count = 0
+        
+        for c in cycles:
+            # For twin sync stations, skip very short cycles (part passthrough)
+            if c['sequence_id'] in TWIN_SYNC_STATIONS and c['cycle_time_sec'] < SKIP_CYCLE_THRESHOLD:
+                skipped_count += 1
+                continue
+            filtered_cycles.append(c)
+        
+        if skipped_count > 0:
+            logger.debug(f"[FILTER] Skipped {skipped_count} passthrough cycles from twin sync stations")
+        
+        if not filtered_cycles:
             return
         
         try:
@@ -495,7 +519,7 @@ class OEEDataCollector:
                         c['cycle_time_sec'] - c['desired_cycle_sec'],
                         ((c['cycle_time_sec'] - c['desired_cycle_sec']) / c['desired_cycle_sec'] * 100) if c['desired_cycle_sec'] > 0 else 0
                     )
-                    for c in cycles
+                    for c in filtered_cycles
                 ])
         except Exception as e:
             logger.error(f"[ERROR] Cycle time insert failed: {e}")

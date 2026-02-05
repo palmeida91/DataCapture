@@ -1,7 +1,10 @@
 """
-Production Monitoring System - Complete OEE Data Collector
-Collects cycle times, TA data, quality counters, and calculates OEE
-Includes break detection based on TA value freezing
+Production Monitoring System - V2 OEE Data Collector
+Version 2 Features:
+- OPC UA auto-reconnection with exponential backoff
+- Clean, fault-focused logging (single log file)
+- Connection event tracking in database
+- Improved break detection
 """
 
 import sys
@@ -12,26 +15,17 @@ import json
 from datetime import datetime, time as dt_time, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
-import logging
 
 try:
-    from asyncua import Client
     import asyncpg
 except ImportError as e:
     print(f"ERROR: Missing required library: {e}")
-    print("Please run: pip install asyncua asyncpg")
+    print("Please run: pip install asyncpg")
     sys.exit(1)
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('data_collector_oee.log', encoding='utf-8'),
-        logging.StreamHandler(sys.stdout)
-    ]
-)
-logger = logging.getLogger(__name__)
+# Import V2 components
+from logging_config import setup_logging, DataCollectionLogger
+from opcua_connection_manager import OPCUAConnectionManager
 
 
 class BreakDetector:
@@ -48,7 +42,8 @@ class BreakDetector:
     FREEZE_THRESHOLD = 3           # consecutive frozen readings to confirm break
     EARLY_LATE_TOLERANCE_MIN = 2   # minutes, under this = on-time
     
-    def __init__(self):
+    def __init__(self, logger: DataCollectionLogger):
+        self.logger = logger
         # Previous TA snapshot: {sequence_id: (ta_percent, fault_time)}
         self.prev_ta: Dict[int, Tuple[float, float]] = {}
         # How many consecutive cycles the values have been frozen
@@ -91,7 +86,7 @@ class BreakDetector:
             
             self.scheduled_breaks = [dict(r) for r in rows]
         
-        logger.info(f"[BREAKS] Loaded {len(self.scheduled_breaks)} scheduled breaks for today (dow={day_of_week})")
+        self.logger.info(f"Break schedule loaded: {len(self.scheduled_breaks)} breaks")
     
     def _find_scheduled_break(self) -> Optional[Dict]:
         """
@@ -189,16 +184,22 @@ class BreakDetector:
                 self.break_detected_at = now
                 self.current_scheduled_break = scheduled
                 self.current_break_id = await self._insert_break_start(db_pool, scheduled, now)
-                logger.info(f"[BREAK] Started: {scheduled['break_name']} (scheduled {scheduled['start_time']}-{scheduled['end_time']})")
+                
+                start_time = scheduled['start_time'].strftime('%H:%M')
+                end_time = scheduled['end_time'].strftime('%H:%M')
+                self.logger.break_event('started', scheduled['break_name'], 
+                                       f"({start_time}-{end_time})")
             else:
-                # Frozen but no matching scheduled break - could be a fault, ignore
-                logger.debug(f"[BREAK] TA frozen but no scheduled break found at this time, ignoring")
+                # Frozen but no matching scheduled break - could be a fault
+                self.logger.debug(f"TA frozen but no scheduled break found at this time")
         
         elif self.in_break and not is_frozen:
             # --- Transition: IN_BREAK → RUNNING ---
             if self.current_break_id:
-                await self._update_break_end(db_pool, self.current_break_id, self.current_scheduled_break, now)
-                logger.info(f"[BREAK] Ended: {self.current_scheduled_break['break_name']} at {now.strftime('%H:%M:%S')}")
+                compliance = await self._update_break_end(db_pool, self.current_break_id, 
+                                                          self.current_scheduled_break, now)
+                self.logger.break_event('ended', self.current_scheduled_break['break_name'],
+                                       compliance)
             
             # Reset state
             self.in_break = False
@@ -231,8 +232,12 @@ class BreakDetector:
         
         return row_id
     
-    async def _update_break_end(self, db_pool: asyncpg.Pool, break_id: int, scheduled: Dict, actual_end: datetime):
-        """Update actual_breaks row with end_time, duration, and late_end_minutes."""
+    async def _update_break_end(self, db_pool: asyncpg.Pool, break_id: int, scheduled: Dict, 
+                                actual_end: datetime) -> str:
+        """
+        Update actual_breaks row with end_time, duration, and late_end_minutes.
+        Returns compliance string for logging
+        """
         # Ensure actual_end is timezone-naive for comparison
         if actual_end.tzinfo is not None:
             actual_end = actual_end.replace(tzinfo=None)
@@ -242,8 +247,6 @@ class BreakDetector:
         # Calculate late_end: how many minutes after scheduled did it actually end
         diff_seconds = (actual_end - scheduled_end).total_seconds()
         late_minutes = max(0, int(diff_seconds // 60))
-        if late_minutes < self.EARLY_LATE_TOLERANCE_MIN:
-            late_minutes = 0
         
         # Get the start_time from the existing row to calculate duration
         async with db_pool.acquire() as conn:
@@ -264,18 +267,28 @@ class BreakDetector:
                     late_end_minutes = $3
                 WHERE id = $4
             """, actual_end, duration, late_minutes, break_id)
+        
+        # Build compliance string
+        if late_minutes >= self.EARLY_LATE_TOLERANCE_MIN:
+            return f"late by {late_minutes} min"
+        else:
+            return "on time"
 
 
 class OEEDataCollector:
     """Complete OEE data collector with cycle times, TA, quality counters and break detection"""
     
     def __init__(self, config_path: str = "config/opcua_nodes_oee.json"):
+        # Setup logging
+        setup_logging()
+        self.logger = DataCollectionLogger('oee_collector')
+        
         self.config_path = Path(config_path)
         self.config = self._load_config()
-        self.client: Optional[Client] = None
+        self.connection_manager: Optional[OPCUAConnectionManager] = None
         self.db_pool: Optional[asyncpg.Pool] = None
         self.running = False
-        self.break_detector = BreakDetector()
+        self.break_detector = BreakDetector(self.logger)
         
     def _load_config(self) -> Dict:
         """Load configuration from JSON file"""
@@ -283,46 +296,24 @@ class OEEDataCollector:
             with open(self.config_path, 'r') as f:
                 return json.load(f)
         except FileNotFoundError:
-            logger.error(f"Configuration file not found: {self.config_path}")
+            self.logger.startup_failure(f"Configuration file not found: {self.config_path}")
             sys.exit(1)
         except json.JSONDecodeError as e:
-            logger.error(f"Invalid JSON in configuration file: {e}")
+            self.logger.startup_failure(f"Invalid JSON in configuration: {e}")
             sys.exit(1)
     
-    async def connect_opcua(self) -> bool:
-        """Connect to OPC UA server"""
-        url = self.config['connection']['url']
-        
-        try:
-            logger.info(f"Connecting to OPC UA server: {url}")
-            self.client = Client(url)
-            self.client.session_timeout = 30000
-            self.client.application_uri = "urn:ProductionMonitoring:OpcuaClient"
-            
-            # Set security
-            security_policy = self.config['connection'].get('security_policy')
-            security_mode = self.config['connection'].get('security_mode')
-            
-            if security_policy and security_mode:
-                cert_path = self.config['connection'].get('certificate_path', 'client_cert.der')
-                key_path = self.config['connection'].get('key_path', 'client_key.pem')
-                
-                logger.info(f"Using security: {security_policy} / {security_mode}")
-                security_string = f"{security_policy},{security_mode},{cert_path},{key_path}"
-                await self.client.set_security_string(security_string)
-            
-            await self.client.connect()
-            logger.info("[OK] OPC UA connection established")
-            return True
-            
-        except Exception as e:
-            logger.error(f"[ERROR] OPC UA connection failed: {e}")
-            return False
+    async def _on_opcua_connected(self):
+        """Callback when OPC UA connection is established"""
+        self.logger.debug("OPC UA connected callback triggered")
+    
+    async def _on_opcua_disconnected(self):
+        """Callback when OPC UA connection is lost"""
+        self.logger.debug("OPC UA disconnected callback triggered")
     
     async def connect_database(self) -> bool:
         """Connect to PostgreSQL database"""
         try:
-            logger.info("Connecting to PostgreSQL database...")
+            self.logger.info("Connecting to database...")
             
             self.db_pool = await asyncpg.create_pool(
                 host="localhost",
@@ -334,11 +325,11 @@ class OEEDataCollector:
                 max_size=10
             )
             
-            logger.info("[OK] Database connection established")
+            self.logger.startup_success("Database connection established")
             return True
             
         except Exception as e:
-            logger.error(f"[ERROR] Database connection failed: {e}")
+            self.logger.startup_failure(f"Database connection failed: {e}")
             return False
     
     def _get_current_shift_and_hour(self) -> Tuple[int, int]:
@@ -385,24 +376,26 @@ class OEEDataCollector:
         """Read cycle time data for active sequences"""
         cycle_data = []
         active_seqs = self.config['machine']['active_sequences']
+        client = self.connection_manager.get_client()
+        
+        if not client:
+            self.logger.fault('OPC_UA', 'No active client connection')
+            return []
         
         for seq_id in active_seqs:
             try:
                 # Last cycle time from TA database (excludes downtime - blocked/starved/fault)
-                # This gives us the actual running cycle time, not time between parts
                 node_id = f'ns=3;s="cycleTimeScreenInterfaceTADB"."Type"[{seq_id}]."Last"'
-                last_cycle = await self.client.get_node(node_id).read_value()
+                last_cycle = await client.get_node(node_id).read_value()
                 
                 # Desired cycle time from TA database
-                # Note: PLC has typo "Desiered" instead of "Desired"
                 desired_node_id = f'ns=3;s="cycleTimeScreenInterfaceTADB"."Type"[{seq_id}]."Desiered"'
                 try:
-                    desired_cycle = await self.client.get_node(desired_node_id).read_value()
-                    # If desired is 0 or None, fall back to config default
+                    desired_cycle = await client.get_node(desired_node_id).read_value()
                     if not desired_cycle or desired_cycle == 0:
                         desired_cycle = self.config['machine'].get('target_cycle_time_seconds', 17) * 1000
                 except:
-                    desired_cycle = self.config['machine'].get('target_cycle_time_seconds', 17) * 1000  # Default 17 seconds in ms
+                    desired_cycle = self.config['machine'].get('target_cycle_time_seconds', 17) * 1000
                 
                 if last_cycle is not None and last_cycle > 0:
                     cycle_data.append({
@@ -412,7 +405,7 @@ class OEEDataCollector:
                     })
                 
             except Exception as e:
-                logger.warning(f"  Could not read cycle time for seq {seq_id}: {e}")
+                self.logger.warning('CYCLE_READ', f"Seq {seq_id} read failed: {e}")
         
         return cycle_data
     
@@ -420,6 +413,11 @@ class OEEDataCollector:
         """Read TA data (current hour only) for active sequences"""
         ta_data = []
         active_seqs = self.config['machine']['active_sequences']
+        client = self.connection_manager.get_client()
+        
+        if not client:
+            self.logger.fault('OPC_UA', 'No active client connection')
+            return []
         
         for seq_id in active_seqs:
             try:
@@ -429,10 +427,10 @@ class OEEDataCollector:
                 starved_node = f'ns=3;s="cycleTimeScreenInterfaceTADB"."Type"[{seq_id}]."starvedTime"[0]'
                 fault_node = f'ns=3;s="cycleTimeScreenInterfaceTADB"."Type"[{seq_id}]."FaultTime"[0]'
                 
-                ta_percent = await self.client.get_node(ta_node).read_value()
-                blocked_time = await self.client.get_node(blocked_node).read_value()
-                starved_time = await self.client.get_node(starved_node).read_value()
-                fault_time = await self.client.get_node(fault_node).read_value()
+                ta_percent = await client.get_node(ta_node).read_value()
+                blocked_time = await client.get_node(blocked_node).read_value()
+                starved_time = await client.get_node(starved_node).read_value()
+                fault_time = await client.get_node(fault_node).read_value()
                 
                 ta_data.append({
                     'sequence_id': seq_id,
@@ -443,24 +441,28 @@ class OEEDataCollector:
                 })
                 
             except Exception as e:
-                logger.warning(f"  Could not read TA for seq {seq_id}: {e}")
+                self.logger.warning('TA_READ', f"Seq {seq_id} read failed: {e}")
         
         return ta_data
     
     async def read_quality_counters(self) -> Dict:
         """Read quality counters for current shift and hour"""
         shift, hour = self._get_current_shift_and_hour()
+        client = self.connection_manager.get_client()
+        
+        if not client:
+            self.logger.fault('OPC_UA', 'No active client connection')
+            return None
         
         try:
             # Read counters for current shift and hour
-            # Type 1 = Good, 2 = Reject, 3 = Rework
             good_node = f'ns=3;s="Counter_Interface"."shifts"[{shift}]."types"[1]."data"[{hour}]'
             reject_node = f'ns=3;s="Counter_Interface"."shifts"[{shift}]."types"[2]."data"[{hour}]'
             rework_node = f'ns=3;s="Counter_Interface"."shifts"[{shift}]."types"[3]."data"[{hour}]'
             
-            good = await self.client.get_node(good_node).read_value()
-            reject = await self.client.get_node(reject_node).read_value()
-            rework = await self.client.get_node(rework_node).read_value()
+            good = await client.get_node(good_node).read_value()
+            reject = await client.get_node(reject_node).read_value()
+            rework = await client.get_node(rework_node).read_value()
             
             return {
                 'shift': shift,
@@ -471,7 +473,7 @@ class OEEDataCollector:
             }
             
         except Exception as e:
-            logger.error(f"  Could not read quality counters: {e}")
+            self.logger.fault('QUALITY_READ', f"Read failed: {e}")
             return None
     
     async def store_cycle_times(self, cycles: List[Dict]):
@@ -483,22 +485,17 @@ class OEEDataCollector:
             return
         
         # Twin sync stations that alternate processing (skip cycles show ~5s)
-        TWIN_SYNC_STATIONS = {47, 48}  # MC595 SYNC1, MC596 SYNC2
-        SKIP_CYCLE_THRESHOLD = 10.0  # seconds
+        TWIN_SYNC_STATIONS = {47, 48}
+        SKIP_CYCLE_THRESHOLD = 10.0
         
         # Filter cycles: exclude skip cycles for twin stations
-        filtered_cycles = []
-        skipped_count = 0
+        filtered_cycles = [c for c in cycles 
+                          if not (c['sequence_id'] in TWIN_SYNC_STATIONS 
+                                 and c['cycle_time_sec'] < SKIP_CYCLE_THRESHOLD)]
         
-        for c in cycles:
-            # For twin sync stations, skip very short cycles (part passthrough)
-            if c['sequence_id'] in TWIN_SYNC_STATIONS and c['cycle_time_sec'] < SKIP_CYCLE_THRESHOLD:
-                skipped_count += 1
-                continue
-            filtered_cycles.append(c)
-        
-        if skipped_count > 0:
-            logger.debug(f"[FILTER] Skipped {skipped_count} passthrough cycles from twin sync stations")
+        if len(filtered_cycles) < len(cycles):
+            skipped = len(cycles) - len(filtered_cycles)
+            self.logger.debug(f"Filtered {skipped} passthrough cycles from twin sync stations")
         
         if not filtered_cycles:
             return
@@ -517,12 +514,13 @@ class OEEDataCollector:
                         c['cycle_time_sec'],
                         c['desired_cycle_sec'],
                         c['cycle_time_sec'] - c['desired_cycle_sec'],
-                        ((c['cycle_time_sec'] - c['desired_cycle_sec']) / c['desired_cycle_sec'] * 100) if c['desired_cycle_sec'] > 0 else 0
+                        ((c['cycle_time_sec'] - c['desired_cycle_sec']) / c['desired_cycle_sec'] * 100) 
+                        if c['desired_cycle_sec'] > 0 else 0
                     )
                     for c in filtered_cycles
                 ])
         except Exception as e:
-            logger.error(f"[ERROR] Cycle time insert failed: {e}")
+            self.logger.fault('DATABASE', f"Cycle time insert failed: {e}")
     
     async def store_ta_data(self, ta_data: List[Dict]):
         """Store TA data"""
@@ -548,7 +546,7 @@ class OEEDataCollector:
                     for ta in ta_data
                 ])
         except Exception as e:
-            logger.error(f"[ERROR] TA insert failed: {e}")
+            self.logger.fault('DATABASE', f"TA insert failed: {e}")
     
     async def store_quality_counters(self, counters: Dict):
         """Store quality counter data"""
@@ -569,45 +567,24 @@ class OEEDataCollector:
                 """, datetime.now(), counters['shift'], counters['hour'],
                     counters['good'], counters['reject'], counters['rework'])
         except Exception as e:
-            logger.error(f"[ERROR] Quality counter insert failed: {e}")
+            self.logger.fault('DATABASE', f"Quality counter insert failed: {e}")
     
     async def collect_once(self):
         """Single data collection cycle"""
         try:
-            shift, hour = self._get_current_shift_and_hour()
-            
             # Check if we're in scheduled break time (for cycle time exclusion)
             in_scheduled_break = self.break_detector.is_in_scheduled_break_time()
-            
-            logger.info("=" * 70)
-            logger.info(f"Collecting data from PLC (Shift {shift}, Hour {hour})...")
             
             # Read all data
             cycles = await self.read_cycle_times()
             ta_data = await self.read_ta_data()
             counters = await self.read_quality_counters()
             
-            # Log what we collected
-            if in_scheduled_break:
-                logger.info(f"[COLLECTOR] In scheduled break - cycle times will NOT be stored")
-            
-            logger.info(f"[DATA] Cycle Times: {len(cycles)} sequences")
-            for c in cycles:
-                logger.info(f"  Seq {c['sequence_id']}: {c['cycle_time_sec']:.1f}s (target: {c['desired_cycle_sec']:.1f}s)")
-            
-            logger.info(f"[DATA] TA Data: {len(ta_data)} sequences")
-            for ta in ta_data:
-                logger.info(f"  Seq {ta['sequence_id']}: TA={ta['ta_percent']:.1f}%, Fault={ta['fault_time_sec']:.0f}s, Blocked={ta['blocked_time_sec']:.0f}s, Starved={ta['starved_time_sec']:.0f}s")
-            
-            if counters:
-                logger.info(f"[DATA] Quality Counters (Shift {counters['shift']}, Hour {counters['hour']})")
-                logger.info(f"  Good: {counters['good']}, Reject: {counters['reject']}, Rework: {counters['rework']}")
-            
             # Store in database - SKIP cycle times during scheduled break
             if not in_scheduled_break:
                 await self.store_cycle_times(cycles)
             else:
-                logger.info(f"[COLLECTOR] ⊘ Cycle times skipped (scheduled break)")
+                self.logger.debug("Cycle times skipped (scheduled break)")
             
             # Always store TA and quality counters (even during breaks)
             await self.store_ta_data(ta_data)
@@ -616,66 +593,88 @@ class OEEDataCollector:
             # Break detection - runs every cycle using TA data
             await self.break_detector.process(ta_data, self.db_pool)
             
-            # Log break state
-            if self.break_detector.in_break:
-                logger.info(f"[BREAK] Currently in break: {self.break_detector.current_scheduled_break['break_name']}")
-            
-            logger.info(f"[OK] Data stored successfully")
+            # Log summary (minimal)
+            self.logger.data_summary(len(cycles), len(ta_data), counters)
             
         except Exception as e:
-            logger.error(f"[ERROR] Error during data collection: {e}")
+            self.logger.fault('COLLECTOR', f"Collection cycle error: {e}")
     
     async def run(self, interval_seconds: int = 10):
         """Main data collection loop"""
-        logger.info("=" * 70)
-        logger.info("COMPLETE OEE DATA COLLECTOR")
-        logger.info("=" * 70)
-        logger.info(f"Starting data collector (interval: {interval_seconds}s)")
+        self.logger.info("=" * 70)
+        self.logger.info("OEE DATA COLLECTOR V2")
+        self.logger.info("=" * 70)
         
-        if not await self.connect_opcua():
-            logger.error("Cannot start without OPC UA connection")
-            return
-        
+        # Connect to database first
         if not await self.connect_database():
-            logger.error("Cannot start without database connection")
-            await self.client.disconnect()
+            self.logger.startup_failure("Cannot start without database connection")
             return
+        
+        # Create OPC UA connection manager
+        url = self.config['connection']['url']
+        security_policy = self.config['connection'].get('security_policy')
+        security_mode = self.config['connection'].get('security_mode')
+        certificate_path = self.config['connection'].get('certificate_path', 'client_cert.der')
+        key_path = self.config['connection'].get('key_path', 'client_key.pem')
+        
+        self.connection_manager = OPCUAConnectionManager(
+            endpoint=url,
+            logger=self.logger,
+            db_pool=self.db_pool,
+            on_connected=self._on_opcua_connected,
+            on_disconnected=self._on_opcua_disconnected,
+            security_policy=security_policy,
+            security_mode=security_mode,
+            certificate_path=certificate_path,
+            key_path=key_path
+        )
+        
+        # Start connection manager (will retry until connected)
+        if security_policy and security_mode:
+            self.logger.info(f"Using security: {security_policy}/{security_mode}")
+        
+        self.logger.info(f"Starting OPC UA connection to {url}...")
+        if not await self.connection_manager.start():
+            self.logger.startup_failure("Failed to start connection manager")
+            await self.db_pool.close()
+            return
+        
+        self.logger.startup_success("OPC UA connection manager started")
         
         # Load break schedule from database
         await self.break_detector.load_scheduled_breaks(self.db_pool)
         
-        logger.info("")
-        logger.info("Active sequences: " + str(self.config['machine']['active_sequences']))
-        logger.info("Collection will start in 3 seconds...")
-        logger.info("")
-        await asyncio.sleep(3)
+        self.logger.info(f"Active sequences: {self.config['machine']['active_sequences']}")
+        self.logger.info(f"Collection interval: {interval_seconds}s")
+        self.logger.info("")
+        self.logger.startup_success("System ready - starting data collection")
+        self.logger.info("=" * 70)
+        self.logger.info("")
         
         self.running = True
         
         try:
             while self.running:
                 await self.collect_once()
-                logger.info(f"Waiting {interval_seconds} seconds until next collection...")
-                logger.info("")
                 await asyncio.sleep(interval_seconds)
                 
         except KeyboardInterrupt:
-            logger.info("Received shutdown signal")
+            self.logger.info("Received shutdown signal")
         except Exception as e:
-            logger.error(f"Fatal error: {e}")
+            self.logger.fault('SYSTEM', f"Fatal error: {e}")
         finally:
             await self.shutdown()
     
     async def shutdown(self):
         """Clean shutdown"""
-        logger.info("")
-        logger.info("=" * 70)
-        logger.info("Shutting down data collector...")
+        self.logger.info("")
+        self.logger.info("=" * 70)
+        self.logger.info("Shutting down...")
         self.running = False
         
         # If we're mid-break when shutting down, close it out
         if self.break_detector.in_break and self.break_detector.current_break_id:
-            logger.info("[BREAK] Closing open break record on shutdown...")
+            self.logger.debug("Closing open break record on shutdown")
             try:
                 await self.break_detector._update_break_end(
                     self.db_pool,
@@ -684,31 +683,29 @@ class OEEDataCollector:
                     datetime.now()
                 )
             except Exception as e:
-                logger.error(f"[BREAK] Failed to close break on shutdown: {e}")
+                self.logger.fault('BREAK_DETECTOR', f"Failed to close break: {e}")
         
-        if self.client:
-            try:
-                await self.client.disconnect()
-                logger.info("   OPC UA disconnected")
-            except:
-                pass
+        # Stop connection manager
+        if self.connection_manager:
+            await self.connection_manager.stop()
         
+        # Close database
         if self.db_pool:
             try:
                 await self.db_pool.close()
-                logger.info("   Database disconnected")
+                self.logger.info("Database disconnected")
             except:
                 pass
         
-        logger.info("Shutdown complete")
-        logger.info("=" * 70)
+        self.logger.info("Shutdown complete")
+        self.logger.info("=" * 70)
 
 
 async def main():
     """Main entry point"""
     import argparse
     
-    parser = argparse.ArgumentParser(description="Complete OEE Data Collector")
+    parser = argparse.ArgumentParser(description="OEE Data Collector V2")
     parser.add_argument('--config', default='config/opcua_nodes_oee.json',
                        help='Path to configuration file')
     parser.add_argument('--interval', type=int, default=10,
@@ -724,4 +721,4 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        logger.info("\nGoodbye!")
+        print("\nGoodbye!")
