@@ -37,12 +37,12 @@ VALUES
     -- Format: (sequence_id, 'sequence_name', is_active, safety_area_id)
     
     -- Example sequences - REPLACE THESE WITH YOUR ACTUAL DATA:
-    (30, '583R01', true, 2),      -- Sequence 52, Safety Area 2
-    (44, '590R01', true, 2),      -- Sequence 53, Safety Area 2
-    (5, 'TT527', true, 1),      -- Sequence 54, Safety Area 2
-    (18, 'Plate Push', true, 1),      -- Sequence 55, Safety Area 2
-    (11, '560R01', true, 1),       -- Sequence 56, Safety Area 2 (no comma on last line!)
-    (22, '575R01', true, 1) 
+    (31, '545_Unload', true, 2),      -- Sequence 31, Safety Area 2
+    --(44, '590R01', true, 2),      -- Sequence 53, Safety Area 2
+    --(5, 'TT527', true, 1),      -- Sequence 54, Safety Area 2
+    --(18, 'Plate Push', true, 1),      -- Sequence 55, Safety Area 2
+    --(11, '560R01', true, 1),       -- Sequence 56, Safety Area 2 (no comma on last line!)
+    --(22, '575R01', true, 1) 
     -- Add more sequences as needed:
     -- (57, 'Operator 8', true, 2),
     -- (58, 'Operator 9', true, 2),
