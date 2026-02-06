@@ -278,7 +278,7 @@ class BreakDetector:
 class OEEDataCollector:
     """Complete OEE data collector with cycle times, TA, quality counters and break detection"""
     
-    def __init__(self, config_path: str = "config/opcua_nodes_oee.json"):
+    def __init__(self, config_path: str = "config/collector_config.json"):
         # Setup logging
         setup_logging()
         self.logger = DataCollectionLogger('oee_collector')
@@ -315,14 +315,16 @@ class OEEDataCollector:
         try:
             self.logger.info("Connecting to database...")
             
+            db_config = self.config['database']
+            
             self.db_pool = await asyncpg.create_pool(
-                host="localhost",
-                port=5432,
-                database="production",
-                user="collector",
-                password="secure_password_here",
-                min_size=2,
-                max_size=10
+                host=db_config['host'],
+                port=db_config['port'],
+                database=db_config['database'],
+                user=db_config['user'],
+                password=db_config['password'],
+                min_size=db_config.get('min_pool_size', 2),
+                max_size=db_config.get('max_pool_size', 10)
             )
             
             self.logger.startup_success("Database connection established")
@@ -341,13 +343,25 @@ class OEEDataCollector:
         current_time = now.time()
         
         # Define shift times (24-hour format)
+        #Monday to Thursday:
         # Shift 1: 06:00-14:00 (hours 0-7)
         # Shift 2: 14:00-22:00 (hours 0-7)
         # Shift 3: 22:00-06:00 (hours 0-7)
-        
-        shift_1_start = dt_time(6, 0)
-        shift_2_start = dt_time(14, 0)
-        shift_3_start = dt_time(22, 0)
+        #Friday:
+        # Shift 1: 06:00-13:30 (hours 0-7)
+        # Shift 2: 13:30-21:00 (hours 0-7)
+        # Shift 3: 21:00-04:30 (hours 0-7)
+
+        #Get current weekday (1=Monday, 7=Sunday)
+        weekday = now.isoweekday()
+        if weekday == 5:  # Friday
+            shift_1_start = dt_time(6, 0)
+            shift_2_start = dt_time(13, 30)
+            shift_3_start = dt_time(21, 0)
+        else:  # Monday to Thursday
+            shift_1_start = dt_time(6, 0)
+            shift_2_start = dt_time(14, 0)
+            shift_3_start = dt_time(22, 0)
         
         # Determine shift
         if shift_1_start <= current_time < shift_2_start:
@@ -413,6 +427,7 @@ class OEEDataCollector:
         """Read TA data (current hour only) for active sequences"""
         ta_data = []
         active_seqs = self.config['machine']['active_sequences']
+        opcua_nodes = self.config['opcua_nodes']
         client = self.connection_manager.get_client()
         
         if not client:
@@ -421,11 +436,12 @@ class OEEDataCollector:
         
         for seq_id in active_seqs:
             try:
-                # Read current hour values (index 0)
-                ta_node = f'ns=3;s="cycleTimeScreenInterfaceTADB"."Type"[{seq_id}]."TA"[0]'
-                blocked_node = f'ns=3;s="cycleTimeScreenInterfaceTADB"."Type"[{seq_id}]."blockedTime"[0]'
-                starved_node = f'ns=3;s="cycleTimeScreenInterfaceTADB"."Type"[{seq_id}]."starvedTime"[0]'
-                fault_node = f'ns=3;s="cycleTimeScreenInterfaceTADB"."Type"[{seq_id}]."FaultTime"[0]'
+
+                # Replace your original assignments with:
+                ta_node = opcua_nodes['ta_percent'].format(seq=seq_id)
+                blocked_node = opcua_nodes['blocked_time'].format(seq=seq_id)
+                starved_node = opcua_nodes['starved_time'].format(seq=seq_id)
+                fault_node = opcua_nodes['fault_time'].format(seq=seq_id)
                 
                 ta_percent = await client.get_node(ta_node).read_value()
                 blocked_time = await client.get_node(blocked_node).read_value()
@@ -449,16 +465,17 @@ class OEEDataCollector:
         """Read quality counters for current shift and hour"""
         shift, hour = self._get_current_shift_and_hour()
         client = self.connection_manager.get_client()
-        
+        opcua_nodes = self.config['opcua_nodes']
+
         if not client:
             self.logger.fault('OPC_UA', 'No active client connection')
             return None
         
         try:
             # Read counters for current shift and hour
-            good_node = f'ns=3;s="Counter_Interface"."shifts"[{shift}]."types"[1]."data"[{hour}]'
-            reject_node = f'ns=3;s="Counter_Interface"."shifts"[{shift}]."types"[2]."data"[{hour}]'
-            rework_node = f'ns=3;s="Counter_Interface"."shifts"[{shift}]."types"[3]."data"[{hour}]'
+            good_node = opcua_nodes['quality_good'].format(shift=shift, hour=hour)
+            reject_node = opcua_nodes['quality_reject'].format(shift=shift, hour=hour)
+            rework_node = opcua_nodes['quality_rework'].format(shift=shift, hour=hour)
             
             good = await client.get_node(good_node).read_value()
             reject = await client.get_node(reject_node).read_value()
@@ -611,11 +628,16 @@ class OEEDataCollector:
             return
         
         # Create OPC UA connection manager
-        url = self.config['connection']['url']
-        security_policy = self.config['connection'].get('security_policy')
-        security_mode = self.config['connection'].get('security_mode')
-        certificate_path = self.config['connection'].get('certificate_path', 'client_cert.der')
-        key_path = self.config['connection'].get('key_path', 'client_key.pem')
+        url = self.config['machine']['opcua_endpoint']
+        # Ensure full OPC UA URL format
+        if not url.startswith('opc.tcp://'):
+            url = f'opc.tcp://{url}'
+        
+        security_config = self.config.get('security', {})
+        security_policy = security_config.get('policy')
+        security_mode = security_config.get('mode')
+        certificate_path = security_config.get('certificate_path', 'client_cert.der')
+        key_path = security_config.get('key_path', 'client_key.pem')
         
         self.connection_manager = OPCUAConnectionManager(
             endpoint=url,
@@ -706,7 +728,7 @@ async def main():
     import argparse
     
     parser = argparse.ArgumentParser(description="OEE Data Collector V2")
-    parser.add_argument('--config', default='config/opcua_nodes_oee.json',
+    parser.add_argument('--config', default='config/collector_config.json',
                        help='Path to configuration file')
     parser.add_argument('--interval', type=int, default=10,
                        help='Data collection interval in seconds')
