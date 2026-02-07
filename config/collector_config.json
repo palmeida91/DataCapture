@@ -6,8 +6,8 @@
     "namespace": 3,
     "target_cycle_time_seconds": 17,
     "sequence_count": 64,
-    "active_sequences": [5, 8, 9, 10, 11, 15, 18, 19, 21, 22, 23, 24, 30, 31, 39, 40, 41, 43, 44, 47, 48, 49, 50, 51],
-    "twin_sync_stations": [47, 48],
+    "active_sequences": [5,37],
+    "twin_sync_stations": [],
     "skip_cycle_threshold_seconds": 2.0
   },
   
@@ -36,8 +36,8 @@
   "security": {
     "policy": "Basic256Sha256",
     "mode": "SignAndEncrypt",
-    "certificate_path": "client_cert.der",
-    "key_path": "client_key.pem"
+    "certificate_path": "cert/client_cert.der",
+    "key_path": "cert/client_key.pem"
   },
   
   "collection": {

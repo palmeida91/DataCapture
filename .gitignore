@@ -36,3 +36,6 @@ backups/
 
 # Grafana local storage
 grafana/data/
+
+# OPC UA client certificates
+certs/

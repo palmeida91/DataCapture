@@ -37,7 +37,7 @@ VALUES
     -- Format: (sequence_id, 'sequence_name', is_active, safety_area_id)
     
     -- Example sequences - REPLACE THESE WITH YOUR ACTUAL DATA:
-    (31, '545_Unload', true, 2),      -- Sequence 31, Safety Area 2
+    (37, '545R01', true, 2),      -- Sequence 31, Safety Area 2
     --(44, '590R01', true, 2),      -- Sequence 53, Safety Area 2
     --(5, 'TT527', true, 1),      -- Sequence 54, Safety Area 2
     --(18, 'Plate Push', true, 1),      -- Sequence 55, Safety Area 2
@@ -56,7 +56,7 @@ ON CONFLICT (sequence_id) DO NOTHING;
 -- Count how many sequences were added
 SELECT COUNT(*) AS "Sequences Added" 
 FROM sequences 
-WHERE sequence_id IN (30, 44, 5, 18, 11, 22);  -- Update this list to match your sequence IDs
+WHERE sequence_id IN (37);  -- Update this list to match your sequence IDs
 
 
 -- ============================================================================
