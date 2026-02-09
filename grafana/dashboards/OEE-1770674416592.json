@@ -1,0 +1,852 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": 2,
+  "links": [],
+  "panels": [
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "P185CFBD6AB7D3539"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "fieldMinMax": false,
+          "mappings": [],
+          "max": 100,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": 0
+              },
+              {
+                "color": "semi-dark-yellow",
+                "value": 60
+              },
+              {
+                "color": "dark-green",
+                "value": 85
+              }
+            ]
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "displayMode": "basic",
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": false
+        },
+        "maxVizHeight": 300,
+        "minVizHeight": 24,
+        "minVizWidth": 8,
+        "namePlacement": "auto",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showUnfilled": false,
+        "sizing": "auto",
+        "valueMode": "color"
+      },
+      "pluginVersion": "12.3.2",
+      "targets": [
+        {
+          "dataset": "production",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "P185CFBD6AB7D3539"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH current_station_performance AS (\r\n    SELECT \r\n        s.sequence_name,\r\n        AVG(ta.ta_percent) as avg_ta,\r\n        PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY ct.desired_cycle_time_seconds) / \r\n        NULLIF(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY ct.cycle_time_seconds), 0) * 100 as performance_percent\r\n    FROM cycle_times ct\r\n    JOIN sequences s ON ct.sequence_id = s.sequence_id\r\n    JOIN technical_availability ta ON ct.sequence_id = ta.sequence_id \r\n        AND date_trunc('minute', ct.time) = date_trunc('minute', ta.time)\r\n    WHERE ct.time >= date_trunc('hour', NOW())\r\n        AND s.is_active = true\r\n    GROUP BY s.sequence_id, s.sequence_name\r\n),\r\nbottleneck AS (\r\n    SELECT \r\n        sequence_name,\r\n        avg_ta / 100.0 * performance_percent / 100.0 * 100 as bottleneck_oee\r\n    FROM current_station_performance\r\n    ORDER BY (avg_ta / 100.0 * performance_percent / 100.0) ASC\r\n    LIMIT 1\r\n),\r\ncurrent_quality AS (\r\n    SELECT \r\n        good_parts::float / NULLIF(good_parts + reject_parts + rework_parts, 0) * 100 as quality_percent\r\n    FROM quality_counters\r\n    WHERE time >= NOW() - INTERVAL '10 minutes'\r\n    ORDER BY time DESC\r\n    LIMIT 1\r\n)\r\nSELECT \r\n    'Line OEE' as metric,\r\n    ROUND((b.bottleneck_oee * q.quality_percent / 100.0)::numeric, 1) as value\r\nFROM bottleneck b\r\nCROSS JOIN current_quality q;\r\n",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
+        }
+      ],
+      "title": "Production Line OEE - Current Hour",
+      "transparent": true,
+      "type": "bargauge"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "P185CFBD6AB7D3539"
+      },
+      "description": "Technical Availability",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "max": 100,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": 0
+              },
+              {
+                "color": "semi-dark-yellow",
+                "value": 60
+              },
+              {
+                "color": "dark-green",
+                "value": 85
+              }
+            ]
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 9,
+        "x": 0,
+        "y": 5
+      },
+      "id": 2,
+      "options": {
+        "displayMode": "basic",
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": false
+        },
+        "maxVizHeight": 300,
+        "minVizHeight": 16,
+        "minVizWidth": 8,
+        "namePlacement": "auto",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [],
+          "fields": "",
+          "values": true
+        },
+        "showUnfilled": false,
+        "sizing": "auto",
+        "valueMode": "color"
+      },
+      "pluginVersion": "12.3.2",
+      "targets": [
+        {
+          "dataset": "production",
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH current_station_performance AS (\r\n    SELECT \r\n        s.sequence_name,\r\n        AVG(ta.ta_percent) as avg_ta,\r\n        PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY ct.desired_cycle_time_seconds) / \r\n        NULLIF(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY ct.cycle_time_seconds), 0) * 100 as performance_percent\r\n    FROM cycle_times ct\r\n    JOIN sequences s ON ct.sequence_id = s.sequence_id\r\n    JOIN technical_availability ta ON ct.sequence_id = ta.sequence_id \r\n        AND date_trunc('minute', ct.time) = date_trunc('minute', ta.time)\r\n    WHERE ct.time >= date_trunc('hour', NOW())\r\n        AND s.is_active = true\r\n    GROUP BY s.sequence_id, s.sequence_name\r\n),\r\nbottleneck AS (\r\n    SELECT \r\n        sequence_name,\r\n        avg_ta,\r\n        avg_ta / 100.0 * performance_percent / 100.0 * 100 as station_oee\r\n    FROM current_station_performance\r\n    ORDER BY (avg_ta / 100.0 * performance_percent / 100.0) ASC\r\n    LIMIT 1\r\n)\r\nSELECT \r\n    'Availability' as metric,\r\n    ROUND(avg_ta::numeric, 1) as value\r\nFROM bottleneck;",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
+        }
+      ],
+      "title": "TA",
+      "transparent": true,
+      "type": "bargauge"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "P185CFBD6AB7D3539"
+      },
+      "description": "Line Performance",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "max": 100,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": 0
+              },
+              {
+                "color": "semi-dark-yellow",
+                "value": 60
+              },
+              {
+                "color": "green",
+                "value": 85
+              }
+            ]
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 8,
+        "x": 9,
+        "y": 5
+      },
+      "id": 3,
+      "options": {
+        "displayMode": "basic",
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": false
+        },
+        "maxVizHeight": 300,
+        "minVizHeight": 16,
+        "minVizWidth": 8,
+        "namePlacement": "auto",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [],
+          "fields": "",
+          "values": true
+        },
+        "showUnfilled": false,
+        "sizing": "auto",
+        "valueMode": "color"
+      },
+      "pluginVersion": "12.3.2",
+      "targets": [
+        {
+          "dataset": "production",
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH bottleneck_performance AS (\r\n    SELECT \r\n        s.sequence_name,\r\n        PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY ct.desired_cycle_time_seconds) / \r\n        NULLIF(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY ct.cycle_time_seconds), 0) * 100 as performance_percent\r\n    FROM cycle_times ct\r\n    JOIN sequences s ON ct.sequence_id = s.sequence_id\r\n    WHERE ct.time >= date_trunc('hour', NOW())\r\n        AND s.is_active = true\r\n    GROUP BY s.sequence_id, s.sequence_name\r\n    ORDER BY performance_percent ASC\r\n    LIMIT 1\r\n)\r\nSELECT \r\n    'Performance' as metric,\r\n    ROUND(performance_percent::numeric, 1) as value\r\nFROM bottleneck_performance;",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
+        }
+      ],
+      "title": "PERFORMANCE",
+      "transparent": true,
+      "type": "bargauge"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "P185CFBD6AB7D3539"
+      },
+      "description": "Line Quality output",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "max": 100,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": 0
+              },
+              {
+                "color": "semi-dark-yellow",
+                "value": 60
+              },
+              {
+                "color": "dark-green",
+                "value": 85
+              }
+            ]
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 7,
+        "x": 17,
+        "y": 5
+      },
+      "id": 4,
+      "options": {
+        "displayMode": "basic",
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": false
+        },
+        "maxVizHeight": 300,
+        "minVizHeight": 16,
+        "minVizWidth": 8,
+        "namePlacement": "auto",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [],
+          "fields": "",
+          "values": true
+        },
+        "showUnfilled": false,
+        "sizing": "auto",
+        "valueMode": "color"
+      },
+      "pluginVersion": "12.3.2",
+      "targets": [
+        {
+          "dataset": "production",
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT \r\n    'Quality' as metric,\r\n    quality_percent as value\r\nFROM current_oee;",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
+        }
+      ],
+      "title": "QUALITY",
+      "transparent": true,
+      "type": "bargauge"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "P185CFBD6AB7D3539"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "max": 3600,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "dark-green",
+                "value": 0
+              },
+              {
+                "color": "#EAB839",
+                "value": 120
+              },
+              {
+                "color": "red",
+                "value": 600
+              }
+            ]
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 0,
+        "y": 10
+      },
+      "id": 6,
+      "options": {
+        "displayMode": "basic",
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": false
+        },
+        "maxVizHeight": 300,
+        "minVizHeight": 16,
+        "minVizWidth": 8,
+        "namePlacement": "auto",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [],
+          "fields": "",
+          "values": true
+        },
+        "showUnfilled": false,
+        "sizing": "auto",
+        "valueMode": "color"
+      },
+      "pluginVersion": "12.3.2",
+      "targets": [
+        {
+          "dataset": "production",
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH bottleneck_downtime AS (\r\n    SELECT \r\n        s.sequence_name,\r\n        AVG(ta.fault_time_seconds) as avg_fault,\r\n        AVG(ta.blocked_time_seconds) as avg_blocked,\r\n        AVG(ta.starved_time_seconds) as avg_starved,\r\n        AVG(ta.ta_percent) / 100.0 * \r\n        (PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY ct.desired_cycle_time_seconds) / \r\n         NULLIF(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY ct.cycle_time_seconds), 0)) as station_oee_factor\r\n    FROM cycle_times ct\r\n    JOIN sequences s ON ct.sequence_id = s.sequence_id\r\n    JOIN technical_availability ta ON ct.sequence_id = ta.sequence_id \r\n        AND date_trunc('minute', ct.time) = date_trunc('minute', ta.time)\r\n    WHERE ct.time >= date_trunc('hour', NOW())\r\n        AND s.is_active = true\r\n    GROUP BY s.sequence_id, s.sequence_name\r\n    ORDER BY station_oee_factor ASC\r\n    LIMIT 1\r\n)\r\nSELECT 'Fault Time' as metric, ROUND(avg_fault::numeric, 0) as value FROM bottleneck_downtime\r\nUNION ALL\r\nSELECT 'Blocked Time' as metric, ROUND(avg_blocked::numeric, 0) as value FROM bottleneck_downtime\r\nUNION ALL\r\nSELECT 'Starved Time' as metric, ROUND(avg_starved::numeric, 0) as value FROM bottleneck_downtime;",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
+        }
+      ],
+      "title": "Downtime Breakdown Current Hour - Lowest OEE station",
+      "transparent": true,
+      "type": "bargauge"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "P185CFBD6AB7D3539"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "center",
+            "cellOptions": {
+              "mode": "basic",
+              "type": "color-background"
+            },
+            "footer": {
+              "reducers": []
+            },
+            "inspect": false
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Good"
+            },
+            "properties": [
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "red",
+                      "value": 0
+                    },
+                    {
+                      "color": "light-yellow",
+                      "value": 99
+                    },
+                    {
+                      "color": "light-green",
+                      "value": 110
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Rework"
+            },
+            "properties": [
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "light-green",
+                      "value": 0
+                    },
+                    {
+                      "color": "light-yellow",
+                      "value": 5
+                    },
+                    {
+                      "color": "red",
+                      "value": 10
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Rework"
+            },
+            "properties": [
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "light-green",
+                      "value": 0
+                    },
+                    {
+                      "color": "light-yellow",
+                      "value": 5
+                    },
+                    {
+                      "color": "red",
+                      "value": 15
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Period"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "auto"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Total"
+            },
+            "properties": [
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "red",
+                      "value": 0
+                    },
+                    {
+                      "color": "light-yellow",
+                      "value": 110
+                    },
+                    {
+                      "color": "light-green",
+                      "value": 140
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 12,
+        "x": 12,
+        "y": 10
+      },
+      "id": 7,
+      "options": {
+        "cellHeight": "lg",
+        "enablePagination": false,
+        "showHeader": true
+      },
+      "pluginVersion": "12.3.2",
+      "targets": [
+        {
+          "dataset": "production",
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH hour_boundaries AS (\r\n    -- Generate the two hours we want to show\r\n    SELECT date_trunc('hour', NOW()) as hour, 'Current Hour' as period\r\n    UNION ALL\r\n    SELECT date_trunc('hour', NOW() - INTERVAL '1 hour'), 'Previous Hour'\r\n),\r\nlatest_per_hour AS (\r\n    -- Get most recent data per hour\r\n    SELECT DISTINCT ON (date_trunc('hour', time))\r\n        date_trunc('hour', time) as hour,\r\n        good_parts,\r\n        reject_parts,\r\n        rework_parts\r\n    FROM quality_counters\r\n    WHERE time >= NOW() - INTERVAL '2 hours'\r\n    ORDER BY date_trunc('hour', time), time DESC\r\n)\r\nSELECT \r\n    hb.period as \"Period\",\r\n    COALESCE(lph.good_parts, 0) as \"Good\",\r\n    COALESCE(lph.rework_parts, 0) as \"Rework\",\r\n    COALESCE(lph.reject_parts, 0) as \"Reject\",\r\n    COALESCE(lph.good_parts + lph.reject_parts + lph.rework_parts, 0) as \"Total\"\r\nFROM hour_boundaries hb\r\nLEFT JOIN latest_per_hour lph ON hb.hour = lph.hour\r\nORDER BY hb.hour DESC;\r\n",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
+        }
+      ],
+      "title": "Parts Produced This + Last Hour",
+      "transparent": true,
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "P185CFBD6AB7D3539"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "axisBorderShow": true,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "axisSoftMin": 0,
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 3,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "area"
+            }
+          },
+          "mappings": [],
+          "max": 200,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": 0
+              },
+              {
+                "color": "yellow",
+                "value": 60
+              },
+              {
+                "color": "green",
+                "value": 85
+              }
+            ]
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 16
+      },
+      "id": 5,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "hidden",
+          "placement": "right",
+          "showLegend": false
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "12.3.2",
+      "targets": [
+        {
+          "dataset": "production",
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "WITH hourly_station_oee AS (\r\n    SELECT \r\n        date_trunc('hour', ct.time) as hour,\r\n        ct.sequence_id,\r\n        s.sequence_name,\r\n        AVG(ta.ta_percent) as avg_ta,\r\n        (PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY ct.desired_cycle_time_seconds)) /\r\n        NULLIF((PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY ct.cycle_time_seconds)), 0) * 100 as performance\r\n    FROM cycle_times ct\r\n    JOIN sequences s ON ct.sequence_id = s.sequence_id\r\n    JOIN technical_availability ta ON ct.sequence_id = ta.sequence_id\r\n        AND date_trunc('minute', ct.time) = date_trunc('minute', ta.time)\r\n    WHERE ct.time >= NOW() - INTERVAL '24 hours'\r\n        AND s.is_active = true\r\n    GROUP BY date_trunc('hour', ct.time), ct.sequence_id, s.sequence_name\r\n),\r\nhourly_bottleneck AS (\r\n    SELECT DISTINCT ON (hour)\r\n        hour,\r\n        sequence_name as bottleneck_name,\r\n        ROUND((avg_ta / 100.0 * performance / 100.0 * 100)::numeric, 1) as bottleneck_oee\r\n    FROM hourly_station_oee\r\n    ORDER BY hour, (avg_ta / 100.0 * performance / 100.0) ASC\r\n),\r\nhourly_quality AS (\r\n    SELECT \r\n        date_trunc('hour', time) as hour,\r\n        ROUND((MAX(good_parts)::float / NULLIF(MAX(good_parts) + MAX(reject_parts) + MAX(rework_parts), 0) * 100)::numeric, 1) as quality_percent\r\n    FROM quality_counters\r\n    WHERE time >= NOW() - INTERVAL '24 hours'\r\n    GROUP BY date_trunc('hour', time)\r\n)\r\nSELECT \r\n    hb.hour as time,\r\n    ROUND((hb.bottleneck_oee * hq.quality_percent / 100.0)::numeric, 1) as \"OEE %\",\r\n    hb.bottleneck_name as \"Bottleneck\"\r\nFROM hourly_bottleneck hb\r\nLEFT JOIN hourly_quality hq ON hb.hour = hq.hour\r\nORDER BY hb.hour;",
+          "refId": "A",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
+        }
+      ],
+      "title": "Hourly OEE Trend",
+      "transparent": true,
+      "type": "timeseries"
+    }
+  ],
+  "preload": false,
+  "schemaVersion": 42,
+  "tags": [],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "OEE",
+  "uid": "ad2vclk",
+  "version": 59
+}
