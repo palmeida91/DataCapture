@@ -1,14 +1,14 @@
 {
   "machine": {
     "machine_id": "Line 1",
-    "machine_name": "Cell 1",
-    "opcua_endpoint": "opc.tcp://192.168.60.2:4840",
+    "machine_name": "Cell 2",
+    "opcua_endpoint": "opc.tcp://192.168.61.2:4840",
     "namespace": 3,
     "target_cycle_time_seconds": 17,
     "sequence_count": 64,
-    "active_sequences": [5,37],
-    "twin_sync_stations": [],
-    "skip_cycle_threshold_seconds": 2.0
+    "active_sequences": [5,8,9,10,11,15, 18, 19,21, 22,23,24,30,31,39,40,41,43,44,47,48,49,50, 51],
+    "twin_sync_stations": [47,48],
+    "skip_cycle_threshold_seconds": 5.0
   },
   
   "database": {
