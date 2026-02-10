@@ -361,12 +361,12 @@ class ChartGenerator:
         # Style setup
         plt.rcParams.update({
             'font.family': 'sans-serif',
-            'font.size': 14,
-            'axes.titlesize': 16,
+            'font.size': 22,
+            'axes.titlesize': 26,
             'axes.titleweight': 'bold',
-            'axes.labelsize': 14,
-            'xtick.labelsize': 14,
-            'ytick.labelsize': 14,
+            'axes.labelsize': 22,
+            'xtick.labelsize': 20,
+            'ytick.labelsize': 20,
             'figure.facecolor': 'white',
         })
 
@@ -391,20 +391,20 @@ class ChartGenerator:
         oee_values = [float(d['oee'] or 0) for d in data]
         colors = [self._color_by_oee(v) for v in oee_values]
 
-        fig, ax = plt.subplots(figsize=(16, max(4, len(names) * 0.75)))
+        fig, ax = plt.subplots(figsize=(20, max(8, len(names) * 1.1)))
 
-        bars = ax.barh(names, oee_values, color=colors, edgecolor='white', height=0.6)
+        bars = ax.barh(names, oee_values, color=colors, edgecolor='white', height=0.7)
 
         # Add value labels at end of each bar
         for bar, val in zip(bars, oee_values):
             ax.text(bar.get_width() + 1, bar.get_y() + bar.get_height() / 2,
-                    f'{val:.1f}%', va='center', ha='left', fontsize=12, fontweight='bold')
+                    f'{val:.1f}%', va='center', ha='left', fontsize=20, fontweight='bold')
 
         ax.set_xlim(0, max(max(oee_values) * 1.15, 110))
         ax.set_xlabel('OEE %')
         ax.set_title(title)
         ax.axvline(x=85, color='green', linestyle='--', alpha=0.5, label='Target 85%')
-        ax.legend(loc='lower right', fontsize=9)
+        ax.legend(loc='lower right', fontsize=18)
         ax.invert_yaxis()
 
         plt.tight_layout()
@@ -426,16 +426,16 @@ class ChartGenerator:
         blocked = [float(d['blocked_sec'] or 0) for d in data]
         starved = [float(d['starved_sec'] or 0) for d in data]
 
-        fig, ax = plt.subplots(figsize=(16, max(4, len(names) * 0.75)))
+        fig, ax = plt.subplots(figsize=(20, max(8, len(names) * 1.1)))
 
-        ax.barh(names, fault, color=COLORS['fault'], label='Fault', height=0.6)
-        ax.barh(names, blocked, left=fault, color=COLORS['blocked'], label='Blocked', height=0.6)
+        ax.barh(names, fault, color=COLORS['fault'], label='Fault', height=0.7)
+        ax.barh(names, blocked, left=fault, color=COLORS['blocked'], label='Blocked', height=0.7)
         left_starved = [f + b for f, b in zip(fault, blocked)]
-        ax.barh(names, starved, left=left_starved, color=COLORS['starved'], label='Starved', height=0.6)
+        ax.barh(names, starved, left=left_starved, color=COLORS['starved'], label='Starved', height=0.7)
 
         ax.set_xlabel('Time (seconds)')
         ax.set_title(title)
-        ax.legend(loc='lower right', fontsize=9)
+        ax.legend(loc='lower right', fontsize=18)
         ax.invert_yaxis()
 
         plt.tight_layout()
@@ -547,29 +547,54 @@ class ReportBuilder:
 
         self.story.append(PageBreak())
 
+    def _add_chart_page(self, chart_path, title):
+        """Add a single chart on its own landscape page, scaled to fill the page"""
+        if not chart_path or not os.path.exists(chart_path):
+            return
+
+        self.story.append(Paragraph(title, self.styles['SectionTitle']))
+        self.story.append(Spacer(1, 2 * mm))
+
+        # Read actual image dimensions to preserve aspect ratio
+        from reportlab.lib.utils import ImageReader
+        img_reader = ImageReader(chart_path)
+        img_w, img_h = img_reader.getSize()
+        aspect = img_h / img_w
+
+        # Available space on landscape A4: ~267mm wide x ~170mm tall (with margins)
+        max_width = 267 * mm
+        max_height = 170 * mm
+
+        # Scale to fit: try full width first, check if height fits
+        draw_width = max_width
+        draw_height = draw_width * aspect
+        if draw_height > max_height:
+            draw_height = max_height
+            draw_width = draw_height / aspect
+
+        img = Image(chart_path)
+        img.drawWidth = draw_width
+        img.drawHeight = draw_height
+        self.story.append(img)
+        self.story.append(PageBreak())
+
     def add_shift_page(self, shift_number, day_label, oee_chart_path,
                        downtime_chart_path, oee_data, break_data):
-        """One page per shift: OEE chart, downtime chart, break compliance table"""
+        """Each shift gets: title page, OEE chart page, table page, downtime chart page, break table page"""
 
         # Shift header
         shift_title = f"Shift {shift_number} — {day_label}"
         self.story.append(Paragraph(shift_title, self.styles['ShiftTitle']))
+        self.story.append(Spacer(1, 5 * mm))
 
-        # OEE chart
+        # OEE chart - full page
         if oee_chart_path and os.path.exists(oee_chart_path):
-            self.story.append(Paragraph("OEE per Station", self.styles['SectionTitle']))
-            img = Image(oee_chart_path)
-            # Scale to fit page width
-            img_width = 250 * mm
-            img_height = img_width * 0.4  # Approximate aspect ratio
-            img.drawWidth = img_width
-            img.drawHeight = img_height
-            self.story.append(img)
-            self.story.append(Spacer(1, 3 * mm))
+            self._add_chart_page(oee_chart_path, "OEE per Station")
 
         # OEE data table
         if oee_data:
             self.story.append(Paragraph("Station Detail", self.styles['SectionTitle']))
+            self.story.append(Spacer(1, 3 * mm))
             table_data = [['Station', 'Availability %', 'Performance %', 'OEE %']]
             for row in oee_data:
                 table_data.append([
@@ -585,7 +610,7 @@ class ReportBuilder:
                 ('BACKGROUND', (0, 0), (-1, 0), HexColor(COLORS['header_bg'])),
                 ('TEXTCOLOR', (0, 0), (-1, 0), white),
                 ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                ('FONTSIZE', (0, 0), (-1, -1), 8),
+                ('FONTSIZE', (0, 0), (-1, -1), 9),
                 ('ALIGN', (1, 0), (-1, -1), 'CENTER'),
                 ('ALIGN', (0, 0), (0, -1), 'LEFT'),
                 ('GRID', (0, 0), (-1, -1), 0.5, grey),
@@ -594,20 +619,16 @@ class ReportBuilder:
                 ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
             ]))
             self.story.append(t)
-            self.story.append(Spacer(1, 5 * mm))
+            self.story.append(PageBreak())
 
-        # Downtime chart
+        # Downtime chart - full page
         if downtime_chart_path and os.path.exists(downtime_chart_path):
-            self.story.append(Paragraph("Downtime Breakdown", self.styles['SectionTitle']))
-            img = Image(downtime_chart_path)
-            img.drawWidth = 250 * mm
-            img.drawHeight = img.drawWidth * 0.4
-            self.story.append(img)
-            self.story.append(Spacer(1, 3 * mm))
+            self._add_chart_page(downtime_chart_path, "Downtime Breakdown")
 
         # Break compliance table
         if break_data:
             self.story.append(Paragraph("Break Compliance", self.styles['SectionTitle']))
+            self.story.append(Spacer(1, 3 * mm))
             btable_data = [['Time', 'Break', 'Actual (min)', 'Scheduled (min)', 'Status']]
             for row in break_data:
                 btable_data.append([
@@ -632,8 +653,7 @@ class ReportBuilder:
                 ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
             ]))
             self.story.append(bt)
-
-        self.story.append(PageBreak())
+            self.story.append(PageBreak())
 
     def build(self):
         """Generate the PDF"""
