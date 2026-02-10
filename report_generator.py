@@ -361,12 +361,12 @@ class ChartGenerator:
         # Style setup
         plt.rcParams.update({
             'font.family': 'sans-serif',
-            'font.size': 11,
-            'axes.titlesize': 13,
+            'font.size': 14,
+            'axes.titlesize': 16,
             'axes.titleweight': 'bold',
-            'axes.labelsize': 11,
-            'xtick.labelsize': 10,
-            'ytick.labelsize': 10,
+            'axes.labelsize': 14,
+            'xtick.labelsize': 14,
+            'ytick.labelsize': 14,
             'figure.facecolor': 'white',
         })
 
