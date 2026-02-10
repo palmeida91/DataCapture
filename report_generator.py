@@ -391,6 +391,12 @@ class ChartGenerator:
         oee_values = [float(d['oee'] or 0) for d in data]
         colors = [self._color_by_oee(v) for v in oee_values]
 
+        # Sort worst OEE first (top of chart)
+        sorted_data = sorted(zip(names, oee_values), key=lambda x: x[1])
+        names = [d[0] for d in sorted_data]
+        oee_values = [d[1] for d in sorted_data]
+        colors = [self._color_by_oee(v) for v in oee_values]
+
         fig, ax = plt.subplots(figsize=(20, max(8, len(names) * 1.1)))
 
         bars = ax.barh(names, oee_values, color=colors, edgecolor='white', height=0.7)
@@ -422,9 +428,17 @@ class ChartGenerator:
             return None
 
         names = [d['sequence_name'] for d in data]
-        fault = [float(d['fault_sec'] or 0) for d in data]
-        blocked = [float(d['blocked_sec'] or 0) for d in data]
-        starved = [float(d['starved_sec'] or 0) for d in data]
+        fault = [round(float(d['fault_sec'] or 0) / 60) for d in data]
+        blocked = [round(float(d['blocked_sec'] or 0) / 60) for d in data]
+        starved = [round(float(d['starved_sec'] or 0) / 60) for d in data]
+
+        # Sort by total downtime, worst (highest) first at top
+        totals = [f + b + s for f, b, s in zip(fault, blocked, starved)]
+        sorted_data = sorted(zip(names, fault, blocked, starved, totals), key=lambda x: x[4])
+        names = [d[0] for d in sorted_data]
+        fault = [d[1] for d in sorted_data]
+        blocked = [d[2] for d in sorted_data]
+        starved = [d[3] for d in sorted_data]
 
         fig, ax = plt.subplots(figsize=(20, max(8, len(names) * 1.1)))
 
@@ -433,7 +447,7 @@ class ChartGenerator:
         left_starved = [f + b for f, b in zip(fault, blocked)]
         ax.barh(names, starved, left=left_starved, color=COLORS['starved'], label='Starved', height=0.7)
 
-        ax.set_xlabel('Time (seconds)')
+        ax.set_xlabel('Time (minutes)')
         ax.set_title(title)
         ax.legend(loc='lower right', fontsize=18)
         ax.invert_yaxis()
@@ -596,7 +610,8 @@ class ReportBuilder:
             self.story.append(Paragraph("Station Detail", self.styles['SectionTitle']))
             self.story.append(Spacer(1, 3 * mm))
             table_data = [['Station', 'Availability %', 'Performance %', 'OEE %']]
-            for row in oee_data:
+            sorted_oee = sorted(oee_data, key=lambda r: float(r['oee'] or 0))
+            for row in sorted_oee:
                 table_data.append([
                     str(row['sequence_name']),
                     f"{row['availability']}%",
