@@ -562,7 +562,7 @@ class ReportBuilder:
         self.story.append(PageBreak())
 
     def _add_chart_page(self, chart_path, title):
-        """Add a single chart on its own landscape page, scaled to fill the page"""
+        """Add a chart with title on one page, scaled to 90% of available space"""
         if not chart_path or not os.path.exists(chart_path):
             return
 
@@ -575,11 +575,11 @@ class ReportBuilder:
         img_w, img_h = img_reader.getSize()
         aspect = img_h / img_w
 
-        # Available space on landscape A4: ~267mm wide x ~170mm tall (with margins)
-        max_width = 267 * mm
-        max_height = 170 * mm
+        # Available space on landscape A4, minus room for title (~15mm)
+        max_width = 267 * mm * 0.9
+        max_height = 155 * mm * 0.9
 
-        # Scale to fit: try full width first, check if height fits
+        # Scale to fit
         draw_width = max_width
         draw_height = draw_width * aspect
         if draw_height > max_height:
@@ -594,14 +594,27 @@ class ReportBuilder:
 
     def add_shift_page(self, shift_number, day_label, oee_chart_path,
                        downtime_chart_path, oee_data, break_data):
-        """Each shift gets: title page, OEE chart page, table page, downtime chart page, break table page"""
+        """Each shift: OEE chart page, table page, downtime chart page, break table page"""
 
         # Shift header
         shift_title = f"Shift {shift_number} — {day_label}"
         self.story.append(Paragraph(shift_title, self.styles['ShiftTitle']))
-        self.story.append(Spacer(1, 5 * mm))
 
-        # OEE chart - full page
+        # Check if there's any data at all for this shift
+        has_data = oee_data or break_data or \
+                   (oee_chart_path and os.path.exists(oee_chart_path)) or \
+                   (downtime_chart_path and os.path.exists(downtime_chart_path))
+
+        if not has_data:
+            self.story.append(Spacer(1, 20 * mm))
+            self.story.append(Paragraph(
+                "No data recorded during shift",
+                self.styles['SectionTitle']
+            ))
+            self.story.append(PageBreak())
+            return
+
+        # OEE chart - own page with title
         if oee_chart_path and os.path.exists(oee_chart_path):
             self._add_chart_page(oee_chart_path, "OEE per Station")
 
