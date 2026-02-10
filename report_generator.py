@@ -392,12 +392,12 @@ class ChartGenerator:
 
         bars = ax.barh(names, oee_values, color=colors, edgecolor='white', height=0.6)
 
-        # Add value labels to the left of the bar (on the y-axis side)
+        # Add value labels at end of each bar
         for bar, val in zip(bars, oee_values):
-            ax.text(-2, bar.get_y() + bar.get_height() / 2,
-                    f'{val:.1f}%', va='center', ha='right', fontsize=8, fontweight='bold')
+            ax.text(bar.get_width() + 1, bar.get_y() + bar.get_height() / 2,
+                    f'{val:.1f}%', va='center', ha='left', fontsize=8, fontweight='bold')
 
-        ax.set_xlim(0, max(max(oee_values) * 1.1, 110))
+        ax.set_xlim(0, max(max(oee_values) * 1.15, 110))
         ax.set_xlabel('OEE %')
         ax.set_title(title)
         ax.axvline(x=85, color='green', linestyle='--', alpha=0.5, label='Target 85%')
