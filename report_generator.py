@@ -322,18 +322,28 @@ class ReportDataFetcher:
     def get_quality_summary(self, date_from, date_to):
         """Get overall quality for the week"""
         self.cursor.execute("""
+            WITH latest_per_hour AS (
+                SELECT
+                    shift_number,
+                    hour_index,
+                    MAX(good_parts) AS good_parts,
+                    MAX(reject_parts) AS reject_parts,
+                    MAX(rework_parts) AS rework_parts
+                FROM quality_counters
+                WHERE time >= %s AND time < %s::date + interval '1 day'
+                GROUP BY shift_number, hour_index
+            )
             SELECT
-                SUM(good_parts) AS good,
-                SUM(reject_parts) AS reject,
-                SUM(rework_parts) AS rework,
+                COALESCE(SUM(good_parts), 0) AS good,
+                COALESCE(SUM(reject_parts), 0) AS reject,
+                COALESCE(SUM(rework_parts), 0) AS rework,
                 CASE
                     WHEN SUM(good_parts) + SUM(reject_parts) + SUM(rework_parts) > 0 THEN
                         ROUND((SUM(good_parts)::numeric /
                         (SUM(good_parts) + SUM(reject_parts) + SUM(rework_parts)) * 100), 1)
                     ELSE 100
                 END AS quality_pct
-            FROM quality_counters
-            WHERE time >= %s AND time < %s::date + interval '1 day'
+            FROM latest_per_hour
         """, (date_from, date_to))
 
         return self.cursor.fetchone()
@@ -382,15 +392,12 @@ class ChartGenerator:
 
         bars = ax.barh(names, oee_values, color=colors, edgecolor='white', height=0.6)
 
-        # Add value labels on bars
+        # Add value labels to the left of the bar (on the y-axis side)
         for bar, val in zip(bars, oee_values):
-            x_pos = bar.get_width() + 1
-            if x_pos > 95:
-                x_pos = bar.get_width() - 5
-            ax.text(x_pos, bar.get_y() + bar.get_height() / 2,
-                    f'{val:.1f}%', va='center', fontsize=8, fontweight='bold')
+            ax.text(-2, bar.get_y() + bar.get_height() / 2,
+                    f'{val:.1f}%', va='center', ha='right', fontsize=8, fontweight='bold')
 
-        ax.set_xlim(0, 110)
+        ax.set_xlim(0, max(max(oee_values) * 1.1, 110))
         ax.set_xlabel('OEE %')
         ax.set_title(title)
         ax.axvline(x=85, color='green', linestyle='--', alpha=0.5, label='Target 85%')
