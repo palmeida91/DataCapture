@@ -361,9 +361,12 @@ class ChartGenerator:
         # Style setup
         plt.rcParams.update({
             'font.family': 'sans-serif',
-            'font.size': 9,
-            'axes.titlesize': 11,
+            'font.size': 11,
+            'axes.titlesize': 13,
             'axes.titleweight': 'bold',
+            'axes.labelsize': 11,
+            'xtick.labelsize': 10,
+            'ytick.labelsize': 10,
             'figure.facecolor': 'white',
         })
 
@@ -388,20 +391,20 @@ class ChartGenerator:
         oee_values = [float(d['oee'] or 0) for d in data]
         colors = [self._color_by_oee(v) for v in oee_values]
 
-        fig, ax = plt.subplots(figsize=(10, max(3, len(names) * 0.45)))
+        fig, ax = plt.subplots(figsize=(12, max(4, len(names) * 0.55)))
 
         bars = ax.barh(names, oee_values, color=colors, edgecolor='white', height=0.6)
 
         # Add value labels at end of each bar
         for bar, val in zip(bars, oee_values):
             ax.text(bar.get_width() + 1, bar.get_y() + bar.get_height() / 2,
-                    f'{val:.1f}%', va='center', ha='left', fontsize=8, fontweight='bold')
+                    f'{val:.1f}%', va='center', ha='left', fontsize=10, fontweight='bold')
 
         ax.set_xlim(0, max(max(oee_values) * 1.15, 110))
         ax.set_xlabel('OEE %')
         ax.set_title(title)
         ax.axvline(x=85, color='green', linestyle='--', alpha=0.5, label='Target 85%')
-        ax.legend(loc='lower right', fontsize=7)
+        ax.legend(loc='lower right', fontsize=9)
         ax.invert_yaxis()
 
         plt.tight_layout()
@@ -423,7 +426,7 @@ class ChartGenerator:
         blocked = [float(d['blocked_sec'] or 0) for d in data]
         starved = [float(d['starved_sec'] or 0) for d in data]
 
-        fig, ax = plt.subplots(figsize=(10, max(3, len(names) * 0.45)))
+        fig, ax = plt.subplots(figsize=(12, max(4, len(names) * 0.55)))
 
         ax.barh(names, fault, color=COLORS['fault'], label='Fault', height=0.6)
         ax.barh(names, blocked, left=fault, color=COLORS['blocked'], label='Blocked', height=0.6)
@@ -432,7 +435,7 @@ class ChartGenerator:
 
         ax.set_xlabel('Time (seconds)')
         ax.set_title(title)
-        ax.legend(loc='lower right', fontsize=7)
+        ax.legend(loc='lower right', fontsize=9)
         ax.invert_yaxis()
 
         plt.tight_layout()
