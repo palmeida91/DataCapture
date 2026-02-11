@@ -107,20 +107,36 @@ def extract_cycle_times(
     db_config = load_db_config()
 
     query = """
+        WITH ranked AS (
+            SELECT
+                ct.time,
+                ct.sequence_id,
+                s.sequence_name,
+                ct.cycle_time_seconds,
+                ct.desired_cycle_time_seconds,
+                ct.deviation_seconds,
+                ct.deviation_percent,
+                LAG(ct.cycle_time_seconds) OVER (
+                    PARTITION BY ct.sequence_id ORDER BY ct.time
+                ) AS prev_cycle_time
+            FROM cycle_times ct
+            LEFT JOIN sequences s ON ct.sequence_id = s.sequence_id
+            WHERE ct.sequence_id = ANY(%s)
+              AND ct.time >= %s
+              AND ct.time <= %s
+        )
         SELECT
-            ct.time,
-            ct.sequence_id,
-            s.sequence_name,
-            ct.cycle_time_seconds,
-            ct.desired_cycle_time_seconds,
-            ct.deviation_seconds,
-            ct.deviation_percent
-        FROM cycle_times ct
-        LEFT JOIN sequences s ON ct.sequence_id = s.sequence_id
-        WHERE ct.sequence_id = ANY(%s)
-          AND ct.time >= %s
-          AND ct.time <= %s
-        ORDER BY ct.time ASC, ct.sequence_id ASC;
+            time,
+            sequence_id,
+            sequence_name,
+            cycle_time_seconds,
+            desired_cycle_time_seconds,
+            deviation_seconds,
+            deviation_percent
+        FROM ranked
+        WHERE prev_cycle_time IS NULL
+           OR cycle_time_seconds != prev_cycle_time
+        ORDER BY time ASC, sequence_id ASC;
     """
 
     try:
