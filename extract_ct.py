@@ -323,9 +323,9 @@ def export_xlsx(rows: list[tuple], output_path: str) -> int:
         target_ref = Reference(ws_summary, min_col=8, min_row=3, max_row=data_end_row)
         chart.add_data(target_ref, titles_from_data=True)
 
-        # Style: bars blue, target red
-        chart.series[0].graphicalProperties.solidFill = "4472C4"
-        chart.series[1].graphicalProperties.solidFill = "FF0000"
+        # Style: avg bars orange, target green
+        chart.series[0].graphicalProperties.solidFill = "FFA500"
+        chart.series[1].graphicalProperties.solidFill = "2E8B57"
 
         chart_row = data_end_row + 2
         ws_summary.add_chart(chart, f"A{chart_row}")
