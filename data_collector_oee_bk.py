@@ -391,7 +391,6 @@ class OEEDataCollector:
         cycle_data = []
         active_seqs = self.config['machine']['active_sequences']
         client = self.connection_manager.get_client()
-        opcua_nodes = self.config['opcua_nodes']
         
         if not client:
             self.logger.fault('OPC_UA', 'No active client connection')
@@ -399,13 +398,12 @@ class OEEDataCollector:
         
         for seq_id in active_seqs:
             try:
-                seq_padded = f"{seq_id:02d}"
-
-                node_id = opcua_nodes['cycle_time_last'].format(seq=seq_id, seq_padded=seq_padded)
+                # Last cycle time from TA database (excludes downtime - blocked/starved/fault)
+                node_id = f'ns=3;s="cycleTimeScreenInterfaceTADB"."Type"[{seq_id}]."Last"'
                 last_cycle = await client.get_node(node_id).read_value()
                 
                 # Desired cycle time from TA database
-                desired_node_id = opcua_nodes['cycle_time_desired'].format(seq=seq_id, seq_padded=seq_padded)
+                desired_node_id = f'ns=3;s="cycleTimeScreenInterfaceTADB"."Type"[{seq_id}]."Desiered"'
                 try:
                     desired_cycle = await client.get_node(desired_node_id).read_value()
                     if not desired_cycle or desired_cycle == 0:
@@ -431,7 +429,6 @@ class OEEDataCollector:
         active_seqs = self.config['machine']['active_sequences']
         opcua_nodes = self.config['opcua_nodes']
         client = self.connection_manager.get_client()
-        shift, _ = self._get_current_shift_and_hour()  # before the for loop
         
         if not client:
             self.logger.fault('OPC_UA', 'No active client connection')
@@ -440,12 +437,11 @@ class OEEDataCollector:
         for seq_id in active_seqs:
             try:
 
-                seq_padded = f"{seq_id:02d}"  
-                
-                ta_node = opcua_nodes['ta_percent'].format(seq=seq_id, seq_padded=seq_padded, shift=shift)
-                blocked_node = opcua_nodes['blocked_time'].format(seq=seq_id, seq_padded=seq_padded, shift=shift)
-                starved_node = opcua_nodes['starved_time'].format(seq=seq_id, seq_padded=seq_padded, shift=shift)
-                fault_node = opcua_nodes['fault_time'].format(seq=seq_id, seq_padded=seq_padded, shift=shift)
+                # Replace your original assignments with:
+                ta_node = opcua_nodes['ta_percent'].format(seq=seq_id)
+                blocked_node = opcua_nodes['blocked_time'].format(seq=seq_id)
+                starved_node = opcua_nodes['starved_time'].format(seq=seq_id)
+                fault_node = opcua_nodes['fault_time'].format(seq=seq_id)
                 
                 ta_percent = await client.get_node(ta_node).read_value()
                 blocked_time = await client.get_node(blocked_node).read_value()

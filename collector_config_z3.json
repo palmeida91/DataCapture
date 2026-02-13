@@ -1,0 +1,109 @@
+{
+  "machine": {
+    "machine_id": "Line 1",
+    "machine_name": "Cell 2",
+    "opcua_endpoint": "opc.tcp://192.168.61.2:4840",
+    "namespace": 3,
+    "target_cycle_time_seconds": 17,
+    "sequence_count": 64,
+    "active_sequences": [5,8,9,10,11,15, 18, 19,21, 22,23,24,30,31,39,40,41,43,44,47,48,49,50, 51],
+    "twin_sync_stations": [47,48],
+    "skip_cycle_threshold_seconds": 5.0
+  },
+  
+  "database": {
+    "host": "localhost",
+    "port": 5432,
+    "database": "production",
+    "user": "collector",
+    "password": "iRob1",
+    "min_pool_size": 2,
+    "max_pool_size": 10
+  },
+  "opcua_nodes": {
+    "cycle_time_last": "ns=3;s=\"cycleTimeScreenInterfaceTADB\".\"SEQ{seq_padded}\".\"CT\".\"Last\"",
+    "cycle_time_desired": "ns=3;s=\"cycleTimeScreenInterfaceTADB\".\"SEQ{seq_padded}\".\"CT\".\"Desiered\"",
+    "ta_percent": "ns=3;s=\"cycleTimeScreenInterfaceTADB\".\"SEQ{seq_padded}\".\"Shift\"[{shift}].\"TA\"[0]",
+    "blocked_time": "ns=3;s=\"cycleTimeScreenInterfaceTADB\".\"SEQ{seq_padded}\".\"Shift\"[{shift}].\"Blocked\"[0]",
+    "starved_time": "ns=3;s=\"cycleTimeScreenInterfaceTADB\".\"SEQ{seq_padded}\".\"Shift\"[{shift}].\"Starved\"[0]",
+    "fault_time": "ns=3;s=\"cycleTimeScreenInterfaceTADB\".\"SEQ{seq_padded}\".\"Shift\"[{shift}].\"Fault\"[0]",
+    "quality_good": "ns=3;s=\"Counter_Interface\".\"shifts\"[{shift}].\"types\"[1].\"data\"[{hour}]",
+    "quality_reject": "ns=3;s=\"Counter_Interface\".\"shifts\"[{shift}].\"types\"[2].\"data\"[{hour}]",
+    "quality_rework": "ns=3;s=\"Counter_Interface\".\"shifts\"[{shift}].\"types\"[3].\"data\"[{hour}]"
+  },
+  
+  "security": {
+    "policy": "Basic256Sha256",
+    "mode": "SignAndEncrypt",
+    "certificate_path": "cert/client_cert.der",
+    "key_path": "cert/client_key.pem"
+  },
+  
+  "collection": {
+    "interval_seconds": 10,
+    "break_detection_enabled": true
+  },
+  
+  "shifts": {
+    "monday_to_thursday": {
+      "1": {"start": "06:00", "end": "14:00"},
+      "2": {"start": "14:00", "end": "22:00"},
+      "3": {"start": "22:00", "end": "06:00"}
+    },
+    "friday": {
+      "1": {"start": "06:00", "end": "13:30"},
+      "2": {"start": "13:30", "end": "21:00"},
+      "3": {"start": "21:00", "end": "04:30"}
+    },
+    "saturday": "off",
+    "sunday": "off"
+  },
+  
+  "breaks": {
+    "monday_to_thursday": {
+      "1": [
+        {"start": "08:00", "end": "08:10", "name": "Morning Break"},
+        {"start": "10:00", "end": "10:30", "name": "Lunch"},
+        {"start": "12:00", "end": "12:10", "name": "Afternoon Break"}
+      ],
+      "2": [
+        {"start": "16:00", "end": "16:10", "name": "Afternoon Break"},
+        {"start": "18:00", "end": "18:30", "name": "Dinner"},
+        {"start": "20:00", "end": "20:10", "name": "Evening Break"}
+      ],
+      "3": [
+        {"start": "00:00", "end": "00:10", "name": "Midnight Break"},
+        {"start": "02:00", "end": "02:30", "name": "Night Lunch"},
+        {"start": "04:00", "end": "04:10", "name": "Early Morning Break"}
+      ]
+    },
+    "friday": {
+      "1": [
+        {"start": "08:00", "end": "08:10", "name": "Morning Break"},
+        {"start": "10:00", "end": "10:30", "name": "Lunch"},
+        {"start": "12:00", "end": "12:10", "name": "Afternoon Break"}
+      ],
+      "2": [
+        {"start": "16:00", "end": "16:10", "name": "Afternoon Break"},
+        {"start": "18:00", "end": "18:30", "name": "Dinner"},
+        {"start": "19:30", "end": "19:40", "name": "Evening Break"}
+      ],
+      "3": [
+        {"start": "23:00", "end": "23:10", "name": "Late Evening Break"},
+        {"start": "01:00", "end": "01:30", "name": "Night Lunch"},
+        {"start": "03:00", "end": "03:10", "name": "Early Morning Break"}
+      ]
+    }
+  },
+
+  "_comments": {
+    "edit_per_laptop": [
+      "machine.machine_id - Line 1",
+      "machine.machine_name - Cell 1",
+      "machine.opcua_endpoint - 192.168.60.2:4840",
+      "machine.target_cycle_time_seconds - 17 seconds",
+      "machine.active_sequences - 1 - 64",
+      "opcua_nodes - Only change if PLC has different structure"
+    ]
+  }
+}
