@@ -442,15 +442,20 @@ class OEEDataCollector:
 
                 seq_padded = f"{seq_id:02d}"  
                 
-                ta_node = opcua_nodes['ta_percent'].format(seq=seq_id, seq_padded=seq_padded, shift=shift)
-                blocked_node = opcua_nodes['blocked_time'].format(seq=seq_id, seq_padded=seq_padded, shift=shift)
-                starved_node = opcua_nodes['starved_time'].format(seq=seq_id, seq_padded=seq_padded, shift=shift)
-                fault_node = opcua_nodes['fault_time'].format(seq=seq_id, seq_padded=seq_padded, shift=shift)
+                ta_node_str = opcua_nodes['ta_percent'].format(seq=seq_id, seq_padded=seq_padded, shift=shift)
+                blocked_node_str = opcua_nodes['blocked_time'].format(seq=seq_id, seq_padded=seq_padded, shift=shift)
+                starved_node_str = opcua_nodes['starved_time'].format(seq=seq_id, seq_padded=seq_padded, shift=shift)
+                fault_node_str = opcua_nodes['fault_time'].format(seq=seq_id, seq_padded=seq_padded, shift=shift)
                 
-                ta_percent = await client.get_node(ta_node).read_value()
-                blocked_time = await client.get_node(blocked_node).read_value()
-                starved_time = await client.get_node(starved_node).read_value()
-                fault_time = await client.get_node(fault_node).read_value()
+                ta_node = client.get_node(ta_node_str)
+                blocked_node = client.get_node(blocked_node_str)
+                starved_node = client.get_node(starved_node_str)
+                fault_node = client.get_node(fault_node_str)
+
+                ta_percent = await ta_node.read_value()
+                blocked_time = await blocked_node.read_value()
+                starved_time = await starved_node.read_value()
+                fault_time = await fault_node.read_value()
                 
                 ta_data.append({
                     'sequence_id': seq_id,
