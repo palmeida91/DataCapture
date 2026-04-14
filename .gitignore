@@ -42,3 +42,9 @@ certs/
 
 #reports
 reports/
+
+#config folder (each laptop is unique)
+config/
+
+#ignore database
+database/

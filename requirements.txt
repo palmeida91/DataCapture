@@ -2,3 +2,5 @@
 asyncua==1.1.5
 asyncpg==0.29.0
 python-dotenv==1.0.0
+
+#pip3.12 install openpyxl --break-system-packages
