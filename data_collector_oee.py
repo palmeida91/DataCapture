@@ -4,7 +4,7 @@ Version 2 Features:
 - OPC UA auto-reconnection with exponential backoff
 - Clean, fault-focused logging (single log file)
 - Connection event tracking in database
-- Improved break detection
+- Parts-counter based break detection (monitors production output)
 """
 
 import sys
@@ -28,43 +28,57 @@ from logging_config import setup_logging, DataCollectionLogger
 from opcua_connection_manager import OPCUAConnectionManager
 
 
-class BreakDetector:
+class PartsBreakDetector:
     """
-    Detects breaks by monitoring TA value freezing.
-    When PLC pauses timers during a break, all TA values stop changing.
-    Compares detected break against break_definitions to populate
-    early_start_minutes and late_end_minutes.
+    Detects breaks by monitoring the shift parts counter on the last station.
+    When operators leave for a break, parts stop being produced.
     
-    Freeze detection: 3 consecutive identical readings (~30s at 10s interval)
-    Tolerance for early/late: 2 minutes (anything under is considered on-time)
+    Break start: parts counter stalls for stall_threshold_seconds AND current time
+                 is within a scheduled break window (with configurable buffer).
+    Break end:   parts counter increases by >= 2 within stall_threshold_seconds
+                 (filters out single test parts built during break).
+    
+    Compliance is calculated as:
+    - early_start_minutes: how many minutes before scheduled start the break began
+    - late_end_minutes: how many minutes after scheduled end the break ended
     """
     
-    FREEZE_THRESHOLD = 3           # consecutive frozen readings to confirm break
-    EARLY_LATE_TOLERANCE_MIN = 2   # minutes, under this = on-time
+    EARLY_LATE_TOLERANCE_MIN = 1  # minutes, under this = on-time
     
-    def __init__(self, logger: DataCollectionLogger):
+    def __init__(self, logger: DataCollectionLogger, config: Dict):
         self.logger = logger
-        # Previous TA snapshot: {sequence_id: (ta_percent, fault_time)}
-        self.prev_ta: Dict[int, Tuple[float, float]] = {}
-        # How many consecutive cycles the values have been frozen
-        self.frozen_count: int = 0
-        # Currently in a break?
+        
+        # Config-driven parameters
+        bc = config.get('break_compliance', {})
+        self.monitor_sequence_id = bc.get('monitor_sequence_id', 1)
+        self.buffer_before_min = bc.get('buffer_minutes_before', 5)
+        self.buffer_after_min = bc.get('buffer_minutes_after', 5)
+        self.stall_threshold_sec = bc.get('stall_threshold_seconds', 60)
+        self.cycle_tolerance_sec = bc.get('cycle_tolerance_seconds', 20)
+        
+        # Parts counter tracking
+        self.prev_total_parts: Optional[int] = None
+        self.last_change_time: Optional[datetime] = None
+        self.parts_at_break_start: Optional[int] = None
+        
+        # For break end detection: track recent part increments
+        # List of (timestamp, total_parts) when counter increases during break
+        self.resume_readings: List[Tuple[datetime, int]] = []
+        
+        # State
         self.in_break: bool = False
-        # Timestamp when freeze was first detected
         self.break_detected_at: Optional[datetime] = None
-        # The scheduled break that matched (from DB)
         self.current_scheduled_break: Optional[Dict] = None
-        # The actual_breaks row id currently open (waiting for end_time)
         self.current_break_id: Optional[int] = None
-        # Scheduled breaks for today, loaded once at startup
+        
+        # Scheduled breaks loaded from DB
         self.scheduled_breaks: List[Dict] = []
     
     async def load_scheduled_breaks(self, db_pool: asyncpg.Pool):
         """Load today's break schedule from break_definitions"""
         now = datetime.now()
-        # PostgreSQL dow: 0=Sunday... but our table uses 1=Monday
-        # Python weekday(): 0=Monday, so +1 to match
-        day_of_week = now.weekday() + 1  # 1=Monday matches our DB
+        # Python weekday(): 0=Monday, so +1 to match our DB (1=Monday)
+        day_of_week = now.weekday() + 1
         
         # Also load tomorrow for shift 3 (crosses midnight)
         tomorrow_dow = ((now.weekday() + 1) % 7) + 1
@@ -87,30 +101,38 @@ class BreakDetector:
             self.scheduled_breaks = [dict(r) for r in rows]
         
         self.logger.info(f"Break schedule loaded: {len(self.scheduled_breaks)} breaks")
+        self.logger.info(f"Break monitor sequence: {self.monitor_sequence_id}, "
+                        f"stall threshold: {self.stall_threshold_sec}s, "
+                        f"buffer: {self.buffer_before_min}m before / {self.buffer_after_min}m after")
+    
+    def _get_current_shift(self) -> int:
+        """Determine current shift number (1-3)"""
+        current_time = datetime.now().time()
+        if dt_time(6, 0) <= current_time < dt_time(14, 0):
+            return 1
+        elif dt_time(14, 0) <= current_time < dt_time(22, 0):
+            return 2
+        else:
+            return 3
     
     def _find_scheduled_break(self) -> Optional[Dict]:
         """
-        Find which scheduled break we're currently in based on time.
-        Returns the break definition or None if not in a scheduled break window.
+        Find which scheduled break we're currently near based on time.
+        Uses configurable buffer before/after the scheduled window.
+        Returns the break definition or None.
         """
         now = datetime.now()
         current_time = now.time()
-        
-        # Determine current shift
-        if dt_time(6, 0) <= current_time < dt_time(14, 0):
-            shift = 1
-        elif dt_time(14, 0) <= current_time < dt_time(22, 0):
-            shift = 2
-        else:
-            shift = 3
+        shift = self._get_current_shift()
         
         for brk in self.scheduled_breaks:
             if brk['shift_number'] != shift:
                 continue
-            # Check if current time falls within the break window
-            # Add 5 min buffer on each side to catch slightly early/late breaks
-            start = (datetime.combine(now.date(), brk['start_time']) - timedelta(minutes=5)).time()
-            end = (datetime.combine(now.date(), brk['end_time']) + timedelta(minutes=5)).time()
+            # Apply configurable buffer
+            start = (datetime.combine(now.date(), brk['start_time']) 
+                    - timedelta(minutes=self.buffer_before_min)).time()
+            end = (datetime.combine(now.date(), brk['end_time']) 
+                  + timedelta(minutes=self.buffer_after_min)).time()
             
             if start <= current_time <= end:
                 return brk
@@ -125,14 +147,7 @@ class BreakDetector:
         """
         now = datetime.now()
         current_time = now.time()
-        
-        # Determine current shift
-        if dt_time(6, 0) <= current_time < dt_time(14, 0):
-            shift = 1
-        elif dt_time(14, 0) <= current_time < dt_time(22, 0):
-            shift = 2
-        else:
-            shift = 3
+        shift = self._get_current_shift()
         
         for brk in self.scheduled_breaks:
             if brk['shift_number'] != shift:
@@ -143,73 +158,133 @@ class BreakDetector:
         
         return False
     
-    def check_frozen(self, ta_data: List[Dict]) -> bool:
+    async def read_shift_parts_total(self, client, opcua_nodes: Dict, shift: int) -> Optional[int]:
         """
-        Compare current TA values against previous reading.
-        Returns True if values are frozen (break detected).
-        Uses first active sequence's ta_percent and fault_time as reference.
+        Read total parts (good + reject + rework) from the shift cumulative counter.
+        Returns total parts count or None on error.
         """
-        if not ta_data:
+        try:
+            good_node_str = opcua_nodes['quality_good_shift'].format(shift=shift)
+            reject_node_str = opcua_nodes['quality_reject_shift'].format(shift=shift)
+            rework_node_str = opcua_nodes['quality_rework_shift'].format(shift=shift)
+            
+            good_node = client.get_node(good_node_str)
+            reject_node = client.get_node(reject_node_str)
+            rework_node = client.get_node(rework_node_str)
+            
+            good = await good_node.read_value()
+            reject = await reject_node.read_value()
+            rework = await rework_node.read_value()
+            
+            total = (int(good) if good else 0) + \
+                    (int(reject) if reject else 0) + \
+                    (int(rework) if rework else 0)
+            
+            return total
+            
+        except Exception as e:
+            self.logger.warning('BREAK_PARTS_READ', f"Shift parts read failed: {e}")
+            return None
+    
+    def _is_stalled(self, now: datetime) -> bool:
+        """Check if parts counter has been stalled for longer than threshold"""
+        if self.last_change_time is None:
+            return False
+        elapsed = (now - self.last_change_time).total_seconds()
+        return elapsed >= self.stall_threshold_sec
+    
+    def _check_resume(self, now: datetime, total_parts: int) -> bool:
+        """
+        Check if production has resumed: 2+ parts built within stall_threshold_seconds.
+        Filters out single test parts during break.
+        """
+        if self.parts_at_break_start is None:
             return False
         
-        # Use first sequence as reference point
-        ref = ta_data[0]
-        seq_id = ref['sequence_id']
-        current_key = (round(ref['ta_percent'], 4), round(ref['fault_time_sec'], 3))
+        # Track when parts increment during break
+        if total_parts > (self.parts_at_break_start + (len(self.resume_readings))):
+            self.resume_readings.append((now, total_parts))
         
-        if seq_id in self.prev_ta:
-            if self.prev_ta[seq_id] == current_key:
-                self.frozen_count += 1
-            else:
-                self.frozen_count = 0
+        # Clean old readings outside the stall window
+        cutoff = now - timedelta(seconds=self.stall_threshold_sec)
+        self.resume_readings = [(t, p) for t, p in self.resume_readings if t >= cutoff]
         
-        # Update previous values
-        self.prev_ta[seq_id] = current_key
+        # Need 2+ part increments within the window
+        if len(self.resume_readings) >= 2:
+            return True
         
-        return self.frozen_count >= self.FREEZE_THRESHOLD
+        return False
     
-    async def process(self, ta_data: List[Dict], db_pool: asyncpg.Pool):
+    async def process(self, client, opcua_nodes: Dict, db_pool: asyncpg.Pool):
         """
         Main break detection logic - called every collection cycle.
-        State machine: RUNNING → IN_BREAK → RUNNING
+        State machine: PRODUCING → IN_BREAK → PRODUCING
         """
-        is_frozen = self.check_frozen(ta_data)
+        shift = self._get_current_shift()
+        total_parts = await self.read_shift_parts_total(client, opcua_nodes, shift)
+        
+        if total_parts is None:
+            return  # Read failed, skip this cycle
+        
         now = datetime.now()
         
-        if not self.in_break and is_frozen:
-            # --- Transition: RUNNING → IN_BREAK ---
-            scheduled = self._find_scheduled_break()
-            if scheduled:
-                self.in_break = True
-                self.break_detected_at = now
-                self.current_scheduled_break = scheduled
-                self.current_break_id = await self._insert_break_start(db_pool, scheduled, now)
-                
-                start_time = scheduled['start_time'].strftime('%H:%M')
-                end_time = scheduled['end_time'].strftime('%H:%M')
-                self.logger.break_event('started', scheduled['break_name'], 
-                                       f"({start_time}-{end_time})")
-            else:
-                # Frozen but no matching scheduled break - could be a fault
-                self.logger.debug(f"TA frozen but no scheduled break found at this time")
+        # Update change tracking
+        if self.prev_total_parts is None:
+            # First reading
+            self.prev_total_parts = total_parts
+            self.last_change_time = now
+            return
         
-        elif self.in_break and not is_frozen:
-            # --- Transition: IN_BREAK → RUNNING ---
-            if self.current_break_id:
-                compliance = await self._update_break_end(db_pool, self.current_break_id, 
-                                                          self.current_scheduled_break, now)
-                self.logger.break_event('ended', self.current_scheduled_break['break_name'],
-                                       compliance)
-            
-            # Reset state
-            self.in_break = False
-            self.break_detected_at = None
-            self.current_scheduled_break = None
-            self.current_break_id = None
+        if total_parts != self.prev_total_parts:
+            # Parts counter changed
+            if not self.in_break:
+                self.last_change_time = now
+            self.prev_total_parts = total_parts
+        
+        # --- State machine ---
+        if not self.in_break:
+            # Check for break start: stalled + near scheduled break
+            if self._is_stalled(now):
+                scheduled = self._find_scheduled_break()
+                if scheduled:
+                    self.in_break = True
+                    self.break_detected_at = now
+                    self.current_scheduled_break = scheduled
+                    self.parts_at_break_start = total_parts
+                    self.resume_readings = []
+                    
+                    self.current_break_id = await self._insert_break_start(
+                        db_pool, scheduled, now
+                    )
+                    
+                    start_time = scheduled['start_time'].strftime('%H:%M')
+                    end_time = scheduled['end_time'].strftime('%H:%M')
+                    self.logger.break_event('started', scheduled['break_name'],
+                                           f"({start_time}-{end_time}) parts={total_parts}")
+        else:
+            # Check for break end: 2+ parts within stall threshold
+            if self._check_resume(now, total_parts):
+                if self.current_break_id:
+                    compliance = await self._update_break_end(
+                        db_pool, self.current_break_id,
+                        self.current_scheduled_break, now
+                    )
+                    self.logger.break_event('ended', 
+                                           self.current_scheduled_break['break_name'],
+                                           f"{compliance}, parts={total_parts}")
+                
+                # Reset state
+                self.in_break = False
+                self.break_detected_at = None
+                self.current_scheduled_break = None
+                self.current_break_id = None
+                self.parts_at_break_start = None
+                self.resume_readings = []
+                self.last_change_time = now
     
-    async def _insert_break_start(self, db_pool: asyncpg.Pool, scheduled: Dict, actual_start: datetime) -> int:
+    async def _insert_break_start(self, db_pool: asyncpg.Pool, scheduled: Dict, 
+                                   actual_start: datetime) -> int:
         """Insert actual_breaks row with start_time. Returns the new row id."""
-        # Ensure actual_start is timezone-naive for comparison
         if actual_start.tzinfo is not None:
             actual_start = actual_start.replace(tzinfo=None)
         
@@ -218,7 +293,6 @@ class BreakDetector:
         # Calculate early_start: how many minutes before scheduled did it actually start
         diff_seconds = (scheduled_start - actual_start).total_seconds()
         early_minutes = max(0, int(diff_seconds // 60))
-        # If under tolerance, mark as 0 (on-time)
         if early_minutes < self.EARLY_LATE_TOLERANCE_MIN:
             early_minutes = 0
         
@@ -232,13 +306,12 @@ class BreakDetector:
         
         return row_id
     
-    async def _update_break_end(self, db_pool: asyncpg.Pool, break_id: int, scheduled: Dict, 
-                                actual_end: datetime) -> str:
+    async def _update_break_end(self, db_pool: asyncpg.Pool, break_id: int, 
+                                 scheduled: Dict, actual_end: datetime) -> str:
         """
         Update actual_breaks row with end_time, duration, and late_end_minutes.
-        Returns compliance string for logging
+        Returns compliance string for logging.
         """
-        # Ensure actual_end is timezone-naive for comparison
         if actual_end.tzinfo is not None:
             actual_end = actual_end.replace(tzinfo=None)
         
@@ -247,14 +320,14 @@ class BreakDetector:
         # Calculate late_end: how many minutes after scheduled did it actually end
         diff_seconds = (actual_end - scheduled_end).total_seconds()
         late_minutes = max(0, int(diff_seconds // 60))
+        if late_minutes < self.EARLY_LATE_TOLERANCE_MIN:
+            late_minutes = 0
         
-        # Get the start_time from the existing row to calculate duration
         async with db_pool.acquire() as conn:
             start_time = await conn.fetchval("""
                 SELECT start_time FROM actual_breaks WHERE id = $1
             """, break_id)
             
-            # Ensure start_time from DB is also naive
             if start_time.tzinfo is not None:
                 start_time = start_time.replace(tzinfo=None)
             
@@ -270,7 +343,7 @@ class BreakDetector:
         
         # Build compliance string
         if late_minutes >= self.EARLY_LATE_TOLERANCE_MIN:
-            return f"late by {late_minutes} min"
+            return f"late return by {late_minutes} min"
         else:
             return "on time"
 
@@ -288,7 +361,7 @@ class OEEDataCollector:
         self.connection_manager: Optional[OPCUAConnectionManager] = None
         self.db_pool: Optional[asyncpg.Pool] = None
         self.running = False
-        self.break_detector = BreakDetector(self.logger)
+        self.break_detector = PartsBreakDetector(self.logger, self.config)
         
     def _load_config(self) -> Dict:
         """Load configuration from JSON file"""
@@ -390,6 +463,7 @@ class OEEDataCollector:
         """Read cycle time data for active sequences"""
         cycle_data = []
         active_seqs = self.config['machine']['active_sequences']
+        opcua_nodes = self.config['opcua_nodes']
         client = self.connection_manager.get_client()
         
         if not client:
@@ -398,14 +472,22 @@ class OEEDataCollector:
         
         for seq_id in active_seqs:
             try:
-                # Last cycle time from TA database (excludes downtime - blocked/starved/fault)
-                node_id = f'ns=3;s="cycleTimeScreenInterfaceTADB"."Type"[{seq_id}]."Last"'
-                last_cycle = await client.get_node(node_id).read_value()
+                seq_padded = f"{seq_id:02d}"
+                
+                # Last cycle time from TA database
+                node_id_str = opcua_nodes['cycle_time_last'].format(
+                    seq=seq_id, seq_padded=seq_padded
+                )
+                node_id = client.get_node(node_id_str)
+                last_cycle = await node_id.read_value()
                 
                 # Desired cycle time from TA database
-                desired_node_id = f'ns=3;s="cycleTimeScreenInterfaceTADB"."Type"[{seq_id}]."Desiered"'
+                desired_node_str = opcua_nodes['cycle_time_desired'].format(
+                    seq=seq_id, seq_padded=seq_padded
+                )
                 try:
-                    desired_cycle = await client.get_node(desired_node_id).read_value()
+                    desired_node = client.get_node(desired_node_str)
+                    desired_cycle = await desired_node.read_value()
                     if not desired_cycle or desired_cycle == 0:
                         desired_cycle = self.config['machine'].get('target_cycle_time_seconds', 17) * 1000
                 except:
@@ -429,24 +511,38 @@ class OEEDataCollector:
         active_seqs = self.config['machine']['active_sequences']
         opcua_nodes = self.config['opcua_nodes']
         client = self.connection_manager.get_client()
-        
+        shift, _ = self._get_current_shift_and_hour()
+
         if not client:
             self.logger.fault('OPC_UA', 'No active client connection')
             return []
         
         for seq_id in active_seqs:
             try:
-
-                # Replace your original assignments with:
-                ta_node = opcua_nodes['ta_percent'].format(seq=seq_id)
-                blocked_node = opcua_nodes['blocked_time'].format(seq=seq_id)
-                starved_node = opcua_nodes['starved_time'].format(seq=seq_id)
-                fault_node = opcua_nodes['fault_time'].format(seq=seq_id)
+                seq_padded = f"{seq_id:02d}"
                 
-                ta_percent = await client.get_node(ta_node).read_value()
-                blocked_time = await client.get_node(blocked_node).read_value()
-                starved_time = await client.get_node(starved_node).read_value()
-                fault_time = await client.get_node(fault_node).read_value()
+                ta_node_str = opcua_nodes['ta_percent'].format(
+                    seq=seq_id, seq_padded=seq_padded, shift=shift
+                )
+                blocked_node_str = opcua_nodes['blocked_time'].format(
+                    seq=seq_id, seq_padded=seq_padded, shift=shift
+                )
+                starved_node_str = opcua_nodes['starved_time'].format(
+                    seq=seq_id, seq_padded=seq_padded, shift=shift
+                )
+                fault_node_str = opcua_nodes['fault_time'].format(
+                    seq=seq_id, seq_padded=seq_padded, shift=shift
+                )
+                
+                ta_node = client.get_node(ta_node_str)
+                blocked_node = client.get_node(blocked_node_str)
+                starved_node = client.get_node(starved_node_str)
+                fault_node = client.get_node(fault_node_str)
+                
+                ta_percent = await ta_node.read_value()
+                blocked_time = await blocked_node.read_value()
+                starved_time = await starved_node.read_value()
+                fault_time = await fault_node.read_value()
                 
                 ta_data.append({
                     'sequence_id': seq_id,
@@ -457,7 +553,10 @@ class OEEDataCollector:
                 })
                 
             except Exception as e:
-                self.logger.warning('TA_READ', f"Seq {seq_id} read failed: {e}")
+                if 'BadNodeIdUnknown' in str(e) or 'BadAttributeIdInvalid' in str(e):
+                    self.logger.debug(f"Seq {seq_id} TA not available: {e}")
+                else:
+                    self.logger.warning('TA_READ', f"Seq {seq_id} read failed: {e}")
         
         return ta_data
     
@@ -607,8 +706,12 @@ class OEEDataCollector:
             await self.store_ta_data(ta_data)
             await self.store_quality_counters(counters)
             
-            # Break detection - runs every cycle using TA data
-            await self.break_detector.process(ta_data, self.db_pool)
+            # Break detection - uses parts counter from OPC UA
+            client = self.connection_manager.get_client()
+            if client:
+                await self.break_detector.process(
+                    client, self.config['opcua_nodes'], self.db_pool
+                )
             
             # Log summary (minimal)
             self.logger.data_summary(len(cycles), len(ta_data), counters)

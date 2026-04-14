@@ -216,21 +216,23 @@ class ReportDataFetcher:
             SELECT
                 sc.sequence_name,
                 COALESCE(ROUND(COALESCE(sta.avg_ta, 0)::numeric, 1), 0) AS availability,
-                COALESCE(ROUND(CASE
-                    WHEN sc.median_cycle_sec > 0 THEN
-                        (sc.median_desired_sec / sc.median_cycle_sec * 100)
-                    ELSE 0
-                END::numeric, 1), 0) AS performance,
-                COALESCE(ROUND((
-                    COALESCE(sta.avg_ta, 0) / 100.0 *
+                COALESCE(LEAST(ROUND(
                     CASE
                         WHEN sc.median_cycle_sec > 0 THEN
-                            sc.median_desired_sec / sc.median_cycle_sec
+                        (sc.median_desired_sec / sc.median_cycle_sec * 100)
                         ELSE 0
-                    END * 100
-                )::numeric, 1), 0) AS oee
+                    END::numeric, 1), 100), 0) AS performance,
+                COALESCE(LEAST(ROUND((
+                    LEAST(COALESCE(sta.avg_ta, 0), 100) / 100.0 *
+                    LEAST(
+                    CASE
+                        WHEN sc.median_cycle_sec > 0 THEN
+                        sc.median_desired_sec / sc.median_cycle_sec * 100
+                        ELSE 0
+                        END, 100) / 100.0 * 100
+                )::numeric, 1), 100), 0) AS oee
             FROM station_cycles sc
-            LEFT JOIN station_ta sta ON sc.sequence_id = sta.sequence_id
+            LEFT JOIN station_ta sta ON sc.sequence_id = sta.sequence_id 
             ORDER BY sc.sequence_name
         """, (
             date_from, date_to, day_of_week,
@@ -296,6 +298,7 @@ class ReportDataFetcher:
         self.cursor.execute("""
             SELECT
                 ab.start_time::timestamp(0) AS break_start,
+                ab.end_time::timestamp(0) AS break_end,
                 bd.break_name,
                 ab.shift_number,
                 ab.duration_minutes AS actual_min,
@@ -314,6 +317,7 @@ class ReportDataFetcher:
                 AND ab.start_time < %s::date + interval '1 day'
                 AND ab.shift_number = %s
                 AND ab.is_scheduled = true
+                AND ab.duration_minutes >= 5
             ORDER BY ab.start_time
         """, (date_from, date_to, shift_number))
 
@@ -458,6 +462,48 @@ class ChartGenerator:
         plt.close(fig)
         return str(filepath)
 
+    def fault_bar_chart(self, data, title, filename):
+        """
+        Horizontal bar chart of fault time only per station.
+        Sorted worst (highest fault) first at top.
+        data: list of dicts with 'sequence_name', 'fault_sec'
+        """
+        if not data:
+            return None
+
+        names = [d['sequence_name'] for d in data]
+        fault = [round(float(d['fault_sec'] or 0) / 60) for d in data]
+
+        # Filter out stations with 0 fault time
+        filtered = [(n, f) for n, f in zip(names, fault) if f > 0]
+        if not filtered:
+            return None
+
+        # Sort worst first (highest at top)
+        filtered.sort(key=lambda x: x[1])
+        names = [d[0] for d in filtered]
+        fault = [d[1] for d in filtered]
+
+        fig, ax = plt.subplots(figsize=(20, max(8, len(names) * 1.1)))
+
+        bars = ax.barh(names, fault, color=COLORS['fault'], edgecolor='white', height=0.7)
+
+        # Add value labels
+        for bar, val in zip(bars, fault):
+            ax.text(bar.get_width() + 0.5, bar.get_y() + bar.get_height() / 2,
+                    f'{val} min', va='center', ha='left', fontsize=20, fontweight='bold')
+
+        ax.set_xlim(0, max(fault) * 1.2 if fault else 10)
+        ax.set_xlabel('Fault Time (minutes)')
+        ax.set_title(title)
+        ax.invert_yaxis()
+
+        plt.tight_layout()
+        filepath = self.output_dir / filename
+        fig.savefig(filepath, dpi=150, bbox_inches='tight')
+        plt.close(fig)
+        return str(filepath)
+
 
 # =============================================================================
 # PDF REPORT BUILDER
@@ -593,8 +639,8 @@ class ReportBuilder:
         self.story.append(PageBreak())
 
     def add_shift_page(self, shift_number, day_label, oee_chart_path,
-                       downtime_chart_path, oee_data, break_data):
-        """Each shift: OEE chart page, table page, downtime chart page, break table page"""
+                       downtime_chart_path, fault_chart_path, oee_data, break_data):
+        """Each shift: OEE chart page, table page, downtime chart page, fault chart page, break table page"""
 
         # Shift header
         shift_title = f"Shift {shift_number} — {day_label}"
@@ -603,7 +649,8 @@ class ReportBuilder:
         # Check if there's any data at all for this shift
         has_data = oee_data or break_data or \
                    (oee_chart_path and os.path.exists(oee_chart_path)) or \
-                   (downtime_chart_path and os.path.exists(downtime_chart_path))
+                   (downtime_chart_path and os.path.exists(downtime_chart_path)) or \
+                   (fault_chart_path and os.path.exists(fault_chart_path))
 
         if not has_data:
             self.story.append(Spacer(1, 20 * mm))
@@ -653,21 +700,36 @@ class ReportBuilder:
         if downtime_chart_path and os.path.exists(downtime_chart_path):
             self._add_chart_page(downtime_chart_path, "Downtime Breakdown")
 
+        # Fault time chart - full page
+        if fault_chart_path and os.path.exists(fault_chart_path):
+            self._add_chart_page(fault_chart_path, "Fault Time per Station")
+
         # Break compliance table
         if break_data:
             self.story.append(Paragraph("Break Compliance", self.styles['SectionTitle']))
             self.story.append(Spacer(1, 3 * mm))
-            btable_data = [['Time', 'Break', 'Actual (min)', 'Scheduled (min)', 'Status']]
+            btable_data = [['Break Start', 'Break End', 'Break', 'Duration (min)',
+                           'Scheduled (min)', 'Start Compliance', 'Return Compliance']]
             for row in break_data:
+                # Start compliance
+                early = row.get('early_start_minutes', 0) or 0
+                start_comp = f"{early} min early" if early > 0 else "On time"
+
+                # Return compliance
+                late = row.get('late_end_minutes', 0) or 0
+                return_comp = f"{late} min late" if late > 0 else "On time"
+
                 btable_data.append([
                     str(row['break_start']),
+                    str(row.get('break_end', '-') or '-'),
                     str(row['break_name'] or 'Unknown'),
                     str(row['actual_min'] or '-'),
                     str(row['scheduled_min'] or '-'),
-                    str(row['status']),
+                    start_comp,
+                    return_comp,
                 ])
 
-            bt = Table(btable_data, colWidths=[50 * mm, 40 * mm, 30 * mm, 35 * mm, 30 * mm])
+            bt = Table(btable_data, colWidths=[38 * mm, 38 * mm, 30 * mm, 25 * mm, 25 * mm, 30 * mm, 30 * mm])
             bt.setStyle(TableStyle([
                 ('BACKGROUND', (0, 0), (-1, 0), HexColor(COLORS['header_bg'])),
                 ('TEXTCOLOR', (0, 0), (-1, 0), white),
@@ -842,13 +904,22 @@ def generate_report(date_from, date_to, output_dir=None, send_email_flag=False,
                     f"downtime_shift{shift_num}.png"
                 )
 
+            fault_chart = None
+
+            if all_downtime_data:
+                fault_chart = chart_gen.fault_bar_chart(
+                    all_downtime_data,
+                    f"Fault Time per Station — Shift {shift_num}",
+                    f"fault_shift{shift_num}.png"
+                )
+
             # Determine day label
             day_label = f"{date_from.strftime('%d %b')} — {date_to.strftime('%d %b %Y')}"
 
             # Add shift page
             report.add_shift_page(
                 shift_num, day_label,
-                oee_chart, downtime_chart,
+                oee_chart, downtime_chart, fault_chart,
                 all_oee_data, all_break_data
             )
 
