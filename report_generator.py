@@ -34,31 +34,31 @@ from email.mime.text import MIMEText
 from email import encoders
 
 try:
-    import psycopg2
-    import psycopg2.extras
+    import psycopg2 # pyright: ignore[reportMissingModuleSource]
+    import psycopg2.extras # pyright: ignore[reportMissingModuleSource]
 except ImportError:
     print("ERROR: Missing psycopg2. Install with:")
     print("  pip3.12 install psycopg2-binary --break-system-packages")
     sys.exit(1)
 
 try:
-    import matplotlib
+    import matplotlib # type: ignore
     matplotlib.use('Agg')  # Headless rendering, no display needed
-    import matplotlib.pyplot as plt
-    import matplotlib.ticker as ticker
-    from matplotlib.patches import FancyBboxPatch
+    import matplotlib.pyplot as plt # pyright: ignore[reportMissingModuleSource]
+    import matplotlib.ticker as ticker # type: ignore
+    from matplotlib.patches import FancyBboxPatch # type: ignore
 except ImportError:
     print("ERROR: Missing matplotlib. Install with:")
     print("  pip3.12 install matplotlib --break-system-packages")
     sys.exit(1)
 
 try:
-    from reportlab.lib.pagesizes import A4, landscape
-    from reportlab.lib.units import mm, cm
-    from reportlab.lib.colors import HexColor, black, white, grey
-    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
-    from reportlab.platypus import (
+    from reportlab.lib.pagesizes import A4, landscape # type: ignore
+    from reportlab.lib.units import mm, cm # type: ignore
+    from reportlab.lib.colors import HexColor, black, white, grey # type: ignore
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle # type: ignore
+    from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT # type: ignore
+    from reportlab.platypus import ( # type: ignore
         SimpleDocTemplate, Paragraph, Spacer, PageBreak,
         Table, TableStyle, Image, KeepTogether
     )
@@ -616,7 +616,7 @@ class ReportBuilder:
         self.story.append(Spacer(1, 2 * mm))
 
         # Read actual image dimensions to preserve aspect ratio
-        from reportlab.lib.utils import ImageReader
+        from reportlab.lib.utils import ImageReader # type: ignore
         img_reader = ImageReader(chart_path)
         img_w, img_h = img_reader.getSize()
         aspect = img_h / img_w
